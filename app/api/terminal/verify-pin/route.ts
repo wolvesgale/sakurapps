@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { NextResponse } from "next/server";
 import { compare } from "bcryptjs";
 import { getCurrentSession } from "@/lib/session";
