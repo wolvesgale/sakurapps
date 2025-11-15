@@ -1,0 +1,72 @@
+# Sakurapps 勤怠・売上管理システム v2
+
+Next.js 14 (App Router) + Prisma + NextAuth で構築した、ガールズバー/飲食店向けの勤怠・売上管理システムです。オーナー・管理者・ドライバーはメール/パスワードでログインし、キャストは店舗端末から名前 + PIN で打刻・売上入力のみを行います。
+
+## 技術スタック
+
+- Next.js 14 (App Router)
+- TypeScript
+- Tailwind CSS + shadcn/ui
+- Prisma ORM + PostgreSQL
+- NextAuth.js (Credentials Provider)
+
+## セットアップ手順
+
+1. 依存パッケージをインストールします。
+
+   ```bash
+   npm install
+   ```
+
+2. 環境変数を設定します。`.env.example` をコピーして `.env` を作成し、各値を調整してください。
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   - `DATABASE_URL`: PostgreSQL の接続文字列
+   - `NEXTAUTH_SECRET`: `openssl rand -base64 32` などで生成したランダム文字列
+   - `NEXTAUTH_URL`: 開発/本番環境のホスト (例: `http://localhost:3000`)
+
+3. Prisma クライアントを生成し、マイグレーションを実行します。
+
+   ```bash
+   npx prisma generate
+   npx prisma migrate dev --name init
+   ```
+
+   > PostgreSQL で `gen_random_uuid()` を利用するため、`pgcrypto` 拡張を有効にしておいてください。
+
+4. 開発サーバーを起動します。
+
+   ```bash
+   npm run dev
+   ```
+
+## デプロイ (Vercel 想定)
+
+Vercel にデプロイする場合は以下の環境変数を設定してください。
+
+- `DATABASE_URL`
+- `NEXTAUTH_SECRET`
+- `NEXTAUTH_URL` (Vercel 上の URL)
+
+Prisma のマイグレーションは CI/CD で実行するか、デプロイ後に `npx prisma migrate deploy` を実行してください。
+
+## 実装済みページ / API 一覧
+
+- `GET/POST /api/auth/[...nextauth]` – NextAuth.js の認証エンドポイント
+- `POST /api/terminal/verify-pin` – キャスト PIN 検証
+- `POST /api/terminal/attendance` – 勤怠レコード登録
+- `POST /api/terminal/sales` – 売上レコード登録
+- `/login` – オーナー/管理者/ドライバー向けログインフォーム
+- `/dashboard` – ロール別ダッシュボード
+- `/stores` – オーナー向け店舗管理
+- `/staff` – オーナー/管理者向けキャスト・ドライバー管理
+- `/reports` – 勤怠・売上レポート
+- `/terminal` – 店舗端末向けキャスト打刻/売上画面
+
+## 補足
+
+- Prisma のスキーマは `prisma/schema.prisma` に、初回テーブル作成用の SQL は `docs/sql/schema.sql` に配置しています。
+- Tailwind CSS と shadcn/ui コンポーネントを共用し、タブレット端末での操作を想定した UI を提供しています。
