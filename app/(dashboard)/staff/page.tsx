@@ -11,6 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
+export const dynamic = "force-dynamic";
+
 const allowedRoles: Prisma.UserCreateInput["role"][] = ["CAST", "DRIVER"];
 
 async function createStaff(formData: FormData) {

@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { TerminalScreen } from "@/components/terminal/terminal-screen";
 
+export const dynamic = "force-dynamic";
+
 export default async function TerminalPage() {
   const session = await getCurrentSession();
 
