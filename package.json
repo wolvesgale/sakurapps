@@ -1,9 +1,3 @@
-"scripts": {
-  "seed": "ts-node prisma/seed.ts",
-  "prisma:generate": "prisma generate",
-  "postinstall": "prisma generate",
-  "vercel-build": "prisma generate && next build",
-}
 {
   "name": "sakurapps",
   "version": "0.1.0",
