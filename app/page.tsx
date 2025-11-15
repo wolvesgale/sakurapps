@@ -1,3 +1,12 @@
-export default function Page() {
-  return <div>v2 初期化</div>;
+import { redirect } from "next/navigation";
+import { getCurrentSession } from "@/lib/session";
+
+export default async function HomePage() {
+  const session = await getCurrentSession();
+
+  if (session) {
+    redirect("/dashboard");
+  }
+
+  redirect("/login");
 }
