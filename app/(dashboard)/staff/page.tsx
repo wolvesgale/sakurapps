@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { hash } from "bcryptjs";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,9 +43,11 @@ async function createStaff(formData: FormData) {
     throw new Error("店舗を選択してください");
   }
 
-  const data: any = {
+  const selectedRole = role as AllowedRole;
+
+  const data: Prisma.UserCreateInput = {
     displayName,
-    role,
+    role: selectedRole,
     isActive: true,
     storeId: resolvedStoreId
   };
@@ -57,7 +60,7 @@ async function createStaff(formData: FormData) {
     data.passwordHash = await hash(password, 10);
   }
 
-  if (role === "CAST") {
+  if (selectedRole === "CAST") {
     if (!pin || typeof pin !== "string" || pin.length < 4) {
       throw new Error("キャスト用PINを4桁で入力してください");
     }

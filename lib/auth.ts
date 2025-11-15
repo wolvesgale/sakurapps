@@ -1,7 +1,16 @@
 import { prisma } from "@/lib/prisma";
 import { compare } from "bcryptjs";
-import type { NextAuthOptions } from "next-auth";
+import type { NextAuthOptions, User as NextAuthUser } from "next-auth";
+import type { AdapterUser } from "next-auth/adapters";
 import Credentials from "next-auth/providers/credentials";
+
+type AuthorizeUser = NextAuthUser & {
+  role: "OWNER" | "ADMIN" | "DRIVER" | "CAST";
+  storeId?: string | null;
+};
+
+const isAuthorizeUser = (user: NextAuthUser | AdapterUser): user is AuthorizeUser =>
+  "role" in user;
 
 export const authOptions: NextAuthOptions = {
   pages: {
@@ -36,33 +45,35 @@ export const authOptions: NextAuthOptions = {
           return null;
         }
 
-        return {
+        const authorizedUser: AuthorizeUser = {
           id: user.id,
           email: user.email,
           name: user.displayName,
           role: user.role,
           storeId: user.storeId
-        } as any;
+        };
+
+        return authorizedUser;
       }
     })
   ],
   callbacks: {
     async jwt({ token, user }) {
-      if (user) {
+      if (user && isAuthorizeUser(user)) {
         token.id = user.id;
-        token.role = (user as any).role;
-        token.storeId = (user as any).storeId ?? null;
+        token.role = user.role;
+        token.storeId = user.storeId ?? null;
         token.name = user.name;
       }
       return token;
     },
     async session({ session, token }) {
       if (session.user) {
-        session.user.id = token.id as string;
-        session.user.role = token.role as any;
-        session.user.storeId = (token.storeId as string | null) ?? null;
+        session.user.id = token.id;
+        session.user.role = token.role;
+        session.user.storeId = token.storeId ?? null;
         if (token.name) {
-          session.user.name = token.name as string;
+          session.user.name = token.name;
         }
       }
       return session;
