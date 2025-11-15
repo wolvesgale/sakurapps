@@ -14,6 +14,7 @@ CREATE TYPE "SaleCategory" AS ENUM ('SET', 'DRINK', 'BOTTLE', 'OTHER');
 
 CREATE TABLE "User" (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+    username TEXT NOT NULL UNIQUE,
     email TEXT UNIQUE,
     "passwordHash" TEXT,
     role "Role" NOT NULL,

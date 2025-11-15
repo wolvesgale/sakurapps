@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 
 export function LoginForm() {
   const router = useRouter();
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -20,12 +20,12 @@ export function LoginForm() {
     setError(null);
     const res = await signIn("credentials", {
       redirect: false,
-      email,
+      username,
       password
     });
     setLoading(false);
     if (res?.error) {
-      setError("メールアドレスまたはパスワードが正しくありません");
+      setError("ユーザーIDまたはパスワードが正しくありません");
       return;
     }
     router.replace("/dashboard");
@@ -34,14 +34,14 @@ export function LoginForm() {
   return (
     <form onSubmit={onSubmit} className="space-y-4 text-sm">
       <div className="space-y-2">
-        <Label htmlFor="email">メールアドレス</Label>
+        <Label htmlFor="username">ユーザーID</Label>
         <Input
-          id="email"
-          type="email"
-          autoComplete="email"
+          id="username"
+          type="text"
+          autoComplete="username"
           required
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
         />
       </div>
       <div className="space-y-2">

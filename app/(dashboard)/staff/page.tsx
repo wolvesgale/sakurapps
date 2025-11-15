@@ -23,6 +23,7 @@ async function createStaff(formData: FormData) {
   }
 
   const displayName = formData.get("displayName");
+  const username = formData.get("username");
   const email = formData.get("email");
   const password = formData.get("password");
   const role = formData.get("role");
@@ -43,6 +44,12 @@ async function createStaff(formData: FormData) {
     throw new Error("ロールを選択してください");
   }
 
+  if (!username || typeof username !== "string" || username.trim().length === 0) {
+    throw new Error("ユーザーIDを入力してください");
+  }
+
+  const normalizedUsername = username.trim();
+
   const resolvedStoreId: string | null =
     typeof storeId === "string" && storeId.length > 0
       ? storeId
@@ -57,13 +64,11 @@ async function createStaff(formData: FormData) {
   const normalizedEmail =
     typeof email === "string" && email.length > 0 ? email.toLowerCase() : null;
 
-  const passwordHash =
-    typeof password === "string" && password.length > 0
-      ? await hashPassword(password)
-      : null;
+  const rawPassword = typeof password === "string" ? password : "";
 
   const data: Prisma.UserCreateInput = {
     displayName,
+    username: normalizedUsername,
     role: selectedRole,
     isActive: true,
     ...(resolvedStoreId && selectedRole !== "OWNER"
@@ -73,8 +78,7 @@ async function createStaff(formData: FormData) {
           }
         }
       : {}),
-    ...(normalizedEmail ? { email: normalizedEmail } : {}),
-    ...(passwordHash ? { passwordHash } : {})
+    ...(normalizedEmail ? { email: normalizedEmail } : {})
   };
 
   if (selectedRole === "CAST") {
@@ -82,6 +86,11 @@ async function createStaff(formData: FormData) {
       throw new Error("キャスト用PINを4桁で入力してください");
     }
     data.castPinHash = await hash(pin, 10);
+  } else {
+    if (rawPassword.length === 0) {
+      throw new Error("パスワードを入力してください");
+    }
+    data.passwordHash = await hashPassword(rawPassword);
   }
 
   await prisma.user.create({
@@ -131,6 +140,16 @@ export default async function StaffPage() {
             <div className="space-y-2">
               <Label htmlFor="displayName">表示名</Label>
               <Input id="displayName" name="displayName" required />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="username">ユーザーID</Label>
+              <Input
+                id="username"
+                name="username"
+                required
+                placeholder="staff01"
+                autoComplete="username"
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="email">メール (任意)</Label>
@@ -196,6 +215,7 @@ export default async function StaffPage() {
               {staff.map((member) => (
                 <li key={member.id} className="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
                   <p className="text-lg font-semibold text-pink-200">{member.displayName}</p>
+                  <p className="text-xs text-slate-400">ユーザーID: {member.username}</p>
                   <p className="text-xs text-slate-400">ロール: {member.role}</p>
                   <p className="text-xs text-slate-400">店舗: {member.store?.name ?? "未設定"}</p>
                   <p className="text-xs text-slate-500">
