@@ -4,15 +4,14 @@ import { hash } from "bcryptjs";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
+import { hashPassword } from "@/lib/auth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-const allowedRoles = ["CAST", "DRIVER"] as const;
-
-type AllowedRole = (typeof allowedRoles)[number];
+const allowedRoles: Prisma.UserCreateInput["role"][] = ["CAST", "DRIVER"];
 
 async function createStaff(formData: FormData) {
   "use server";
@@ -32,33 +31,49 @@ async function createStaff(formData: FormData) {
     throw new Error("表示名を入力してください");
   }
 
-  if (!role || typeof role !== "string" || !allowedRoles.includes(role as AllowedRole)) {
+  if (!role || typeof role !== "string") {
     throw new Error("ロールを選択してください");
   }
 
-  const resolvedStoreId =
-    typeof storeId === "string" && storeId.length > 0 ? storeId : session.user.storeId;
+  const selectedRole = role as Prisma.UserCreateInput["role"];
 
-  if (!resolvedStoreId) {
+  if (!allowedRoles.includes(selectedRole)) {
+    throw new Error("ロールを選択してください");
+  }
+
+  const resolvedStoreId: string | null =
+    typeof storeId === "string" && storeId.length > 0
+      ? storeId
+      : session.user.storeId ?? null;
+
+  const requiresStoreAssociation = selectedRole !== "OWNER" && selectedRole !== "ADMIN";
+
+  if (requiresStoreAssociation && !resolvedStoreId) {
     throw new Error("店舗を選択してください");
   }
 
-  const selectedRole = role as AllowedRole;
+  const normalizedEmail =
+    typeof email === "string" && email.length > 0 ? email.toLowerCase() : null;
+
+  const passwordHash =
+    typeof password === "string" && password.length > 0
+      ? await hashPassword(password)
+      : null;
 
   const data: Prisma.UserCreateInput = {
     displayName,
     role: selectedRole,
     isActive: true,
-    storeId: resolvedStoreId
+    ...(resolvedStoreId && selectedRole !== "OWNER"
+      ? {
+          store: {
+            connect: { id: resolvedStoreId }
+          }
+        }
+      : {}),
+    ...(normalizedEmail ? { email: normalizedEmail } : {}),
+    ...(passwordHash ? { passwordHash } : {})
   };
-
-  if (typeof email === "string" && email.length > 0) {
-    data.email = email.toLowerCase();
-  }
-
-  if (typeof password === "string" && password.length > 0) {
-    data.passwordHash = await hash(password, 10);
-  }
 
   if (selectedRole === "CAST") {
     if (!pin || typeof pin !== "string" || pin.length < 4) {

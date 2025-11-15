@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { compare } from "bcryptjs";
+import { compare, hash } from "bcryptjs";
 import type { NextAuthOptions, User as NextAuthUser } from "next-auth";
 import type { AdapterUser } from "next-auth/adapters";
 import Credentials from "next-auth/providers/credentials";
@@ -80,3 +80,7 @@ export const authOptions: NextAuthOptions = {
     }
   }
 };
+
+export async function hashPassword(password: string) {
+  return hash(password, 10);
+}
