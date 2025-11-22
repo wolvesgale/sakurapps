@@ -1,0 +1,128 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  DRIVER
+  CAST
+}
+
+enum AttendanceType {
+  CLOCK_IN
+  CLOCK_OUT
+  BREAK_START
+  BREAK_END
+}
+
+enum SaleCategory {
+  SET
+  DRINK
+  BOTTLE
+  OTHER
+}
+
+model User {
+  id           String          @id @default(cuid())
+  username     String          @unique
+  email        String?         @unique
+  passwordHash String?
+  role         Role
+  displayName  String
+  storeId      String?
+  store        Store?          @relation(fields: [storeId], references: [id])
+  castPinHash  String?
+  isActive     Boolean         @default(true)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  attendances  Attendance[]
+  sales        Sale[]
+  rides        Ride[]          @relation("DriverRides")
+  approvedDays AttendanceApproval[] @relation("AttendanceApprovalApprovedBy")
+}
+
+model Store {
+  id          String   @id @default(cuid())
+  name        String
+  address     String?
+  openingTime String?
+  closingTime String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       User[]
+  attendances Attendance[]
+  sales       Sale[]
+  rides       Ride[]
+  terminals   Terminal[]
+  attendanceApprovals AttendanceApproval[]
+}
+
+model Attendance {
+  id        String          @id @default(cuid())
+  userId    String
+  storeId   String
+  type      AttendanceType
+  timestamp DateTime        @default(now())
+
+  user  User  @relation(fields: [userId], references: [id])
+  store Store @relation(fields: [storeId], references: [id])
+}
+
+model AttendanceApproval {
+  id           String   @id @default(cuid())
+  storeId      String
+  date         DateTime
+  isApproved   Boolean  @default(false)
+  approvedAt   DateTime?
+  approvedById String?
+
+  store      Store @relation(fields: [storeId], references: [id])
+  approvedBy User? @relation("AttendanceApprovalApprovedBy", fields: [approvedById], references: [id])
+
+  @@unique([storeId, date])
+}
+
+model Sale {
+  id          String       @id @default(cuid())
+  userId      String
+  storeId     String
+  tableNumber String
+  category    SaleCategory
+  amount      Int
+  createdAt   DateTime     @default(now())
+
+  user  User  @relation(fields: [userId], references: [id])
+  store Store @relation(fields: [storeId], references: [id])
+}
+
+model Ride {
+  id        String   @id @default(cuid())
+  driverId  String
+  storeId   String?
+  note      String
+  createdAt DateTime @default(now())
+
+  driver User  @relation("DriverRides", fields: [driverId], references: [id])
+  store  Store? @relation(fields: [storeId], references: [id])
+}
+
+model Terminal {
+  id        String   @id @default(cuid())
+  deviceId  String   @unique
+  label     String?
+  storeId   String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id])
+}
