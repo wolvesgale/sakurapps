@@ -19,153 +19,80 @@ export type TerminalCast = {
   displayName: string;
 };
 
-export type TerminalStore = {
-  id: string;
-  name: string;
-  openingTime: string | null;
-  closingTime: string | null;
-  casts: TerminalCast[];
-};
+const STORE_NAME = "Nest SAKURA";
+
+// TODO: API から取得するキャスト一覧に差し替える
+const mockCasts: TerminalCast[] = [
+  { id: "cast-001", displayName: "さくら" },
+  { id: "cast-002", displayName: "れいな" },
+  { id: "cast-003", displayName: "ゆい" },
+  { id: "driver-001", displayName: "ドライバーA" }
+];
+
+// TODO: API から取得する出勤中キャスト一覧に差し替える
+const mockActiveMembers = [
+  { id: "cast-001", name: "さくら", role: "キャスト", since: "18:00" },
+  { id: "driver-001", name: "ドライバーA", role: "ドライバー", since: "18:30" }
+];
 
 type AttendanceAction = "CLOCK_IN" | "CLOCK_OUT" | "BREAK_START" | "BREAK_END";
 
-type SaleCategory = "SET" | "DRINK" | "BOTTLE" | "OTHER";
+type PaymentMethod = "CASH" | "PAYPAY" | "CREDIT_CARD";
 
-export function TerminalScreen({
-  stores,
-  defaultStoreId,
-  defaultTerminalId
-}: {
-  stores: TerminalStore[];
-  defaultStoreId?: string | null;
-  defaultTerminalId?: string | null;
-}) {
-  const [selectedStoreId, setSelectedStoreId] = useState(
-    defaultStoreId ?? stores[0]?.id ?? ""
-  );
+export function TerminalScreen() {
   const [selectedCastId, setSelectedCastId] = useState<string>("");
-  const [pin, setPin] = useState("");
-  const [pinValid, setPinValid] = useState(false);
+  const [saleCastId, setSaleCastId] = useState<string>("");
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [terminalMessage, setTerminalMessage] = useState<string | null>(null);
-  const [isVerifying, setIsVerifying] = useState(false);
+  const [terminalMessage] = useState<string | null>(
+    "開発モードでは端末IDチェックをスキップしています"
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isCheckingTerminal, setIsCheckingTerminal] = useState(false);
-  const [terminalId, setTerminalId] = useState(defaultTerminalId ?? "");
-  const [authorizedStoreId, setAuthorizedStoreId] = useState<string | null>(null);
-  const [saleTable, setSaleTable] = useState("");
-  const [saleCategory, setSaleCategory] = useState<SaleCategory>("SET");
+  const [currentTime, setCurrentTime] = useState<string>(
+    format(new Date(), "yyyy年MM月dd日 HH:mm", { locale: ja })
+  );
+  const [companionChecked, setCompanionChecked] = useState(false);
+  const [salePayment, setSalePayment] = useState<PaymentMethod>("CASH");
   const [saleAmount, setSaleAmount] = useState("0");
 
-  const store = useMemo(
-    () => stores.find((s) => s.id === selectedStoreId) ?? null,
-    [selectedStoreId, stores]
-  );
-
-  const casts = store?.casts ?? [];
+  const casts = useMemo(() => mockCasts, []);
 
   useEffect(() => {
-    setSelectedCastId("");
-    setPin("");
-    setPinValid(false);
-    setStatusMessage(null);
-  }, [selectedStoreId]);
+    let timeout: ReturnType<typeof setTimeout> | null = null;
 
-  useEffect(() => {
-    setPin("");
-    setPinValid(false);
-    setStatusMessage(null);
-  }, [selectedCastId]);
+    const tick = () => {
+      setCurrentTime(format(new Date(), "yyyy年MM月dd日 HH:mm", { locale: ja }));
+      const now = new Date();
+      const msUntilNextMinute = 60000 - now.getSeconds() * 1000 - now.getMilliseconds();
+      timeout = setTimeout(tick, Math.max(1000, msUntilNextMinute));
+    };
 
-  useEffect(() => {
-    let cancelled = false;
-    if (pin.length === 4 && selectedCastId && authorizedStoreId && terminalId) {
-      setIsVerifying(true);
-      fetch("/api/terminal/verify-pin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: selectedCastId,
-          pin,
-          storeId: authorizedStoreId,
-          terminalId
-        })
-      })
-        .then((res) => res.json())
-        .then((data) => {
-          if (!cancelled) {
-            setPinValid(Boolean(data.valid));
-            if (!data.valid) {
-              setStatusMessage("PINが正しくありません");
-            } else {
-              setStatusMessage(null);
-            }
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setStatusMessage("PIN確認中にエラーが発生しました");
-            setPinValid(false);
-          }
-        })
-        .finally(() => {
-          if (!cancelled) {
-            setIsVerifying(false);
-          }
-        });
-    } else {
-      setPinValid(false);
-    }
+    timeout = setTimeout(tick, 60000);
 
     return () => {
-      cancelled = true;
-    };
-  }, [authorizedStoreId, pin, selectedCastId, terminalId]);
-
-  const handleAuthorizeTerminal = async () => {
-    if (!selectedStoreId || !terminalId) {
-      setTerminalMessage("店舗と端末IDを入力してください");
-      return;
-    }
-    setIsCheckingTerminal(true);
-    setTerminalMessage(null);
-    try {
-      const res = await fetch("/api/terminal/authorize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storeId: selectedStoreId, terminalId })
-      });
-      const body = await res.json();
-      if (!res.ok || !body.authorized) {
-        throw new Error(body.error ?? "端末が許可されていません");
+      if (timeout) {
+        clearTimeout(timeout);
       }
-      setAuthorizedStoreId(body.store.id);
-      setSelectedStoreId(body.store.id);
-      setTerminalMessage(`端末認証済み (${body.store.name})`);
-    } catch (error) {
-      setAuthorizedStoreId(null);
-      setTerminalMessage((error as Error).message);
-    } finally {
-      setIsCheckingTerminal(false);
-    }
-  };
+    };
+  }, []);
 
   const handleAttendance = async (type: AttendanceAction) => {
-    if (!pinValid || !selectedCastId || !authorizedStoreId || !terminalId) {
-      setStatusMessage("端末認証とキャスト選択、PIN確認を行ってください");
+    if (!selectedCastId) {
+      setStatusMessage("キャストを選択してください");
       return;
     }
     setIsSubmitting(true);
     setStatusMessage(null);
     try {
+      // TODO: 同伴出勤フラグを API に渡すようにする
       const res = await fetch("/api/terminal/attendance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: selectedCastId,
-          storeId: authorizedStoreId,
-          terminalId,
-          type
+          storeId: "dev-store",
+          terminalId: "dev-terminal",
+          type,
+          isCompanion: companionChecked
         })
       });
       if (!res.ok) {
@@ -181,8 +108,8 @@ export function TerminalScreen({
   };
 
   const handleSale = async () => {
-    if (!pinValid || !selectedCastId || !authorizedStoreId || !terminalId) {
-      setStatusMessage("端末認証とキャスト選択、PIN確認を行ってください");
+    if (!saleCastId) {
+      setStatusMessage("売上対象のキャストを選択してください");
       return;
     }
     const amount = Number(saleAmount);
@@ -193,15 +120,16 @@ export function TerminalScreen({
     setIsSubmitting(true);
     setStatusMessage(null);
     try {
+      // TODO: 決済区分に合わせて API のカテゴリ定義を更新する
       const res = await fetch("/api/terminal/sales", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: selectedCastId,
-          storeId: authorizedStoreId,
-          terminalId,
-          tableNumber: saleTable,
-          category: saleCategory,
+          userId: saleCastId,
+          storeId: "dev-store",
+          terminalId: "dev-terminal",
+          tableNumber: "",
+          category: "OTHER",
           amount
         })
       });
@@ -210,7 +138,6 @@ export function TerminalScreen({
         throw new Error(body.error ?? "エラーが発生しました");
       }
       setStatusMessage("売上を登録しました");
-      setSaleTable("");
       setSaleAmount("0");
     } catch (err) {
       setStatusMessage((err as Error).message);
@@ -219,67 +146,24 @@ export function TerminalScreen({
     }
   };
 
-  const formattedDate = format(new Date(), "yyyy年MM月dd日 (EEE)", { locale: ja });
-
   return (
     <div className="space-y-8">
       <section className="rounded-3xl border border-slate-800 bg-black/80 p-6 shadow-lg">
         <div className="flex flex-col gap-2 text-center">
-          <p className="text-sm text-slate-300">{formattedDate}</p>
-          <h1 className="text-3xl font-semibold text-pink-300">
-            {store?.name ?? "店舗を選択してください"}
-          </h1>
+          <p className="text-sm text-slate-300">{currentTime}</p>
+          <h1 className="text-3xl font-semibold text-pink-300">{STORE_NAME}</h1>
           <p className="text-sm text-slate-400">
-            営業時間: {store?.openingTime ?? "--:--"} - {store?.closingTime ?? "--:--"}
+            営業時間: --:-- - --:--（後続タスクで店舗設定から取得予定）
           </p>
         </div>
       </section>
 
       <section className="grid gap-6 md:grid-cols-2">
         <div className="space-y-4 rounded-2xl border border-slate-800 bg-black/70 p-6">
-          <div className="space-y-2">
-            <Label>店舗選択</Label>
-            <Select
-              value={selectedStoreId}
-              onValueChange={setSelectedStoreId}
-              disabled={Boolean(authorizedStoreId)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="店舗を選択" />
-              </SelectTrigger>
-              <SelectContent>
-                {stores.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>
-                    {s.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-slate-500">端末登録された店舗のみ利用できます。</p>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="terminalId">端末ID</Label>
-            <div className="flex gap-2">
-              <Input
-                id="terminalId"
-                value={terminalId}
-                onChange={(event) => setTerminalId(event.target.value.trim())}
-                placeholder="端末ごとの登録ID"
-                className="flex-1"
-              />
-              <Button
-                type="button"
-                onClick={handleAuthorizeTerminal}
-                disabled={isCheckingTerminal}
-                variant="secondary"
-              >
-                {isCheckingTerminal ? "確認中" : "認証"}
-              </Button>
-            </div>
-            <p className="text-xs text-slate-400">
-              起動時に店舗IDと端末IDを照合します。
-            </p>
+          <div className="space-y-1">
+            <Label className="text-sm text-slate-400">
+              開発モードでは端末IDチェックをスキップしています
+            </Label>
             {terminalMessage ? (
               <p className="text-xs text-pink-300">{terminalMessage}</p>
             ) : null}
@@ -287,11 +171,109 @@ export function TerminalScreen({
 
           <div className="space-y-2">
             <Label>キャスト選択</Label>
-            <Select
-              value={selectedCastId}
-              onValueChange={setSelectedCastId}
-              disabled={!authorizedStoreId}
+            <Select value={selectedCastId} onValueChange={setSelectedCastId}>
+              <SelectTrigger>
+                <SelectValue placeholder="キャストを選択" />
+              </SelectTrigger>
+              <SelectContent>
+                {casts.map((cast) => (
+                  <SelectItem key={cast.id} value={cast.id}>
+                    {cast.displayName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3">
+            <input
+              id="companion"
+              type="checkbox"
+              checked={companionChecked}
+              onChange={(event) => setCompanionChecked(event.target.checked)}
+              className="h-4 w-4 rounded border border-slate-700 bg-black text-pink-400 focus-visible:outline-none"
+            />
+            <Label htmlFor="companion" className="text-sm text-slate-200">
+              同伴出勤
+            </Label>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 text-lg font-semibold">
+            <Button
+              className="h-16 text-lg"
+              disabled={isSubmitting || !selectedCastId}
+              onClick={() => handleAttendance("CLOCK_IN")}
             >
+              出勤
+            </Button>
+            <Button
+              className="h-16 text-lg"
+              variant="secondary"
+              disabled={isSubmitting || !selectedCastId}
+              onClick={() => handleAttendance("CLOCK_OUT")}
+            >
+              退勤
+            </Button>
+            <Button
+              className="h-16 text-lg"
+              variant="secondary"
+              disabled={isSubmitting || !selectedCastId}
+              onClick={() => handleAttendance("BREAK_START")}
+            >
+              休憩開始
+            </Button>
+            <Button
+              className="h-16 text-lg"
+              variant="secondary"
+              disabled={isSubmitting || !selectedCastId}
+              onClick={() => handleAttendance("BREAK_END")}
+            >
+              休憩終了
+            </Button>
+          </div>
+
+          <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+            <h3 className="text-lg font-semibold text-pink-200">現在出勤中</h3>
+            <div className="space-y-2">
+              {mockActiveMembers.map((member) => (
+                <div
+                  key={member.id}
+                  className="flex items-center justify-between rounded-xl border border-slate-800 bg-black/60 px-3 py-2 text-sm text-slate-100"
+                >
+                  <div className="flex flex-col">
+                    <span className="font-semibold">{member.name}</span>
+                    <span className="text-xs text-slate-400">{member.role}</span>
+                  </div>
+                  <span className="text-xs text-slate-300">{member.since}〜</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-4 rounded-2xl border border-slate-800 bg-black/70 p-6">
+          <h2 className="text-xl font-semibold text-pink-200">売上入力</h2>
+
+          <div className="space-y-2">
+            <Label>区分</Label>
+            <Select
+              value={salePayment}
+              onValueChange={(value) => setSalePayment(value as PaymentMethod)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="選択してください" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="CASH">現金</SelectItem>
+                <SelectItem value="PAYPAY">PayPay</SelectItem>
+                <SelectItem value="CREDIT_CARD">クレジットカード</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="saleCast">キャスト選択</Label>
+            <Select value={saleCastId} onValueChange={setSaleCastId}>
               <SelectTrigger>
                 <SelectValue placeholder="キャストを選択" />
               </SelectTrigger>
@@ -306,81 +288,6 @@ export function TerminalScreen({
           </div>
 
           <div className="space-y-2">
-            <Label>4桁PIN</Label>
-            <Input
-              value={pin}
-              onChange={(event) => setPin(event.target.value.replace(/\D/g, "").slice(0, 4))}
-              inputMode="numeric"
-              maxLength={4}
-              placeholder="****"
-              className="text-center text-2xl tracking-[0.4em] bg-slate-950"
-            />
-            <p className="text-xs text-slate-400">
-              PINが正しい場合のみボタンが有効になります。
-            </p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3 text-lg font-semibold">
-            <Button
-              className="h-16 text-lg"
-              disabled={!pinValid || isSubmitting || isVerifying || !authorizedStoreId}
-              onClick={() => handleAttendance("CLOCK_IN")}
-            >
-              出勤
-            </Button>
-            <Button
-              className="h-16 text-lg"
-              variant="secondary"
-              disabled={!pinValid || isSubmitting || isVerifying || !authorizedStoreId}
-              onClick={() => handleAttendance("CLOCK_OUT")}
-            >
-              退勤
-            </Button>
-            <Button
-              className="h-16 text-lg"
-              variant="secondary"
-              disabled={!pinValid || isSubmitting || isVerifying || !authorizedStoreId}
-              onClick={() => handleAttendance("BREAK_START")}
-            >
-              休憩開始
-            </Button>
-            <Button
-              className="h-16 text-lg"
-              variant="secondary"
-              disabled={!pinValid || isSubmitting || isVerifying || !authorizedStoreId}
-              onClick={() => handleAttendance("BREAK_END")}
-            >
-              休憩終了
-            </Button>
-          </div>
-        </div>
-
-        <div className="space-y-4 rounded-2xl border border-slate-800 bg-black/70 p-6">
-          <h2 className="text-xl font-semibold text-pink-200">売上入力</h2>
-          <div className="space-y-2">
-            <Label htmlFor="table">卓番/伝票番号</Label>
-            <Input
-              id="table"
-              value={saleTable}
-              onChange={(event) => setSaleTable(event.target.value)}
-              placeholder="例: A-12"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>区分</Label>
-            <Select value={saleCategory} onValueChange={(value) => setSaleCategory(value as SaleCategory)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="SET">セット</SelectItem>
-                <SelectItem value="DRINK">ドリンク</SelectItem>
-                <SelectItem value="BOTTLE">ボトル</SelectItem>
-                <SelectItem value="OTHER">その他</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
             <Label htmlFor="amount">金額</Label>
             <Input
               id="amount"
@@ -391,7 +298,7 @@ export function TerminalScreen({
           </div>
           <Button
             className="h-14 w-full text-lg"
-            disabled={!pinValid || isSubmitting || isVerifying || !authorizedStoreId}
+            disabled={isSubmitting || !saleCastId}
             onClick={handleSale}
           >
             売上を登録
