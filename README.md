@@ -81,9 +81,9 @@ Prisma のマイグレーションは CI/CD で実行するか、デプロイ後
 - `POST /api/terminal/authorize` – 端末ID + 店舗ID の照合
 - `/login` – オーナー/管理者/ドライバー向けログインフォーム
 - `/dashboard` – ロール別ダッシュボード
-- `/stores` – オーナー/管理者向け店舗管理
-- `/staff` – オーナー/管理者向けキャスト・ドライバー管理
-- `/reports` – 勤怠・売上レポート
+- `/dashboard/stores` – オーナー/管理者向け店舗管理
+- `/dashboard/staff` – オーナー/管理者向けキャスト・ドライバー管理
+- `/dashboard/reports` – 勤怠・売上レポート
 - `/dashboard/terminal-mgmt` – 店舗端末許可リストの管理（管理画面側のルート。`(dashboard)` グループ内に配置し、キャスト用 `/terminal` と URL が重複しないように分離）
 - `/terminal` – 店舗端末向けキャスト打刻/売上画面（端末IDを照合。ログイン不要）
 
@@ -95,15 +95,15 @@ Prisma のマイグレーションは CI/CD で実行するか、デプロイ後
 app/
 ├── (dashboard)/
 │   ├── dashboard/
-│   │   ├── page.tsx
-│   │   └── terminal-mgmt/
-│   │       └── page.tsx   # /dashboard/terminal-mgmt
-│   ├── reports/
-│   ├── staff/
-│   └── stores/
-├── terminal/               # /terminal（キャスト端末UI）
-├── login/                  # /login（管理者系ログイン）
-└── page.tsx                # ルート（ログインへリダイレクト）
+│   │   ├── page.tsx               # /dashboard
+│   │   ├── reports/               # /dashboard/reports
+│   │   ├── staff/                 # /dashboard/staff
+│   │   ├── stores/                # /dashboard/stores
+│   │   └── terminal-mgmt/         # /dashboard/terminal-mgmt
+│   │       └── page.tsx
+├── terminal/                       # /terminal（キャスト端末UI）
+├── login/                          # /login（管理者系ログイン）
+└── page.tsx                        # ルート（入口ページ）
 ```
 
 `app/(dashboard)/terminal` 配下の旧ディレクトリは削除済みです。同名パスを生成するフォルダが残っていないかを `find app -path "*terminal*"` などで確認してください。

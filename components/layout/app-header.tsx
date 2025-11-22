@@ -8,9 +8,9 @@ import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/dashboard", label: "ダッシュボード" },
-  { href: "/stores", label: "店舗" },
-  { href: "/staff", label: "スタッフ" },
-  { href: "/reports", label: "レポート" },
+  { href: "/dashboard/stores", label: "店舗" },
+  { href: "/dashboard/staff", label: "スタッフ" },
+  { href: "/dashboard/reports", label: "レポート" },
   { href: "/dashboard/terminal-mgmt", label: "端末管理" }
 ];
 
@@ -29,9 +29,10 @@ export function AppHeader() {
           <nav className="flex items-center gap-4 text-slate-300">
             {links
               .filter((link) => {
-                if (link.href === "/stores" && !["OWNER", "ADMIN"].includes(role ?? "")) return false;
-                if (link.href === "/staff" && role === "DRIVER") return false;
-                if (link.href === "/reports" && role === "DRIVER") return false;
+                if (link.href === "/dashboard/stores" && !["OWNER", "ADMIN"].includes(role ?? ""))
+                  return false;
+                if (link.href === "/dashboard/staff" && role === "DRIVER") return false;
+                if (link.href === "/dashboard/reports" && role === "DRIVER") return false;
                 if (link.href === "/dashboard/terminal-mgmt" && role === "DRIVER") return false;
                 if (link.href === "/dashboard/terminal-mgmt" && role === "CAST") return false;
                 return true;
