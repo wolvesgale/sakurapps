@@ -45,6 +45,7 @@ model User {
   attendances  Attendance[]
   sales        Sale[]
   rides        Ride[]          @relation("DriverRides")
+  approvedDays AttendanceApproval[] @relation("AttendanceApprovalApprovedBy")
 }
 
 model Store {
@@ -62,6 +63,7 @@ model Store {
   sales       Sale[]
   rides       Ride[]
   terminals   Terminal[]
+  attendanceApprovals AttendanceApproval[]
 }
 
 model Attendance {
@@ -73,6 +75,20 @@ model Attendance {
 
   user  User  @relation(fields: [userId], references: [id])
   store Store @relation(fields: [storeId], references: [id])
+}
+
+model AttendanceApproval {
+  id           String   @id @default(cuid())
+  storeId      String
+  date         DateTime
+  isApproved   Boolean  @default(false)
+  approvedAt   DateTime?
+  approvedById String?
+
+  store      Store @relation(fields: [storeId], references: [id])
+  approvedBy User? @relation("AttendanceApprovalApprovedBy", fields: [approvedById], references: [id])
+
+  @@unique([storeId, date])
 }
 
 model Sale {

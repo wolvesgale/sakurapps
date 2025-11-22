@@ -23,24 +23,24 @@ export const authOptions: NextAuthOptions = {
     Credentials({
       name: "Credentials",
       credentials: {
-        username: { label: "ユーザーID", type: "text" },
+        email: { label: "メールアドレス", type: "text" },
         password: { label: "パスワード", type: "password" }
       },
       async authorize(credentials) {
-        const username = credentials?.username?.trim();
-        if (!username || !credentials?.password) {
+        const email = credentials?.email?.trim().toLowerCase();
+        if (!email || !credentials?.password) {
           return null;
         }
 
         const user = await prisma.user.findUnique({
-          where: { username }
+          where: { email }
         });
 
-        if (!user || !user.isActive) {
+        if (!user || !user.isActive || !user.passwordHash) {
           return null;
         }
 
-        const isValid = await compare(credentials.password, user.passwordHash ?? "");
+        const isValid = await compare(credentials.password, user.passwordHash);
 
         if (!isValid) {
           return null;

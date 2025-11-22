@@ -44,7 +44,7 @@ export default async function HomePage() {
                 <CardTitle className="text-xl">管理画面ログイン</CardTitle>
               </div>
               <CardDescription className="text-slate-400">
-                OWNER / ADMIN / DRIVER はユーザーID + パスワードでログインし、ダッシュボードや管理ページを利用します。
+                OWNER / ADMIN / DRIVER はメールアドレス + パスワードでログインし、ダッシュボードや管理ページを利用します。
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">

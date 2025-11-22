@@ -66,6 +66,10 @@ async function createStaff(formData: FormData) {
 
   const rawPassword = typeof password === "string" ? password : "";
 
+  if (selectedRole !== "CAST" && !normalizedEmail) {
+    throw new Error("メールアドレスを入力してください");
+  }
+
   const data: Prisma.UserCreateInput = {
     displayName,
     username: normalizedUsername,
@@ -155,12 +159,17 @@ export default async function StaffPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="email">メール (任意)</Label>
+              <Label htmlFor="email">メール (ドライバーは必須)</Label>
               <Input id="email" name="email" type="email" placeholder="login@example.com" />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">パスワード (任意)</Label>
-              <Input id="password" name="password" type="password" placeholder="ログインが必要な場合" />
+              <Label htmlFor="password">パスワード (ドライバーは必須)</Label>
+              <Input
+                id="password"
+                name="password"
+                type="password"
+                placeholder="ドライバーは強力なパスワードを設定してください"
+              />
             </div>
             <div className="space-y-2">
               <Label>ロール</Label>

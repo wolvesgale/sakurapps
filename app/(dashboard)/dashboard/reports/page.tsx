@@ -1,3 +1,4 @@
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { addDays, eachDayOfInterval, endOfMonth, formatISO, startOfDay, startOfMonth } from "date-fns";
 import { ja } from "date-fns/locale";
@@ -5,10 +6,61 @@ import { format } from "date-fns";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatCurrency } from "@/lib/utils";
+
+async function approveAttendanceDay(formData: FormData) {
+  "use server";
+
+  const session = await getCurrentSession();
+
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) {
+    throw new Error("Unauthorized");
+  }
+
+  const dateValue = formData.get("date");
+  const storeIdValue = formData.get("storeId");
+
+  const resolvedStoreId =
+    session.user.role === "ADMIN"
+      ? session.user.storeId
+      : typeof storeIdValue === "string" && storeIdValue.length > 0
+        ? storeIdValue
+        : null;
+
+  if (!resolvedStoreId) {
+    throw new Error("店舗を選択してください");
+  }
+
+  const parsedDate = typeof dateValue === "string" && dateValue.length > 0 ? new Date(dateValue) : new Date();
+  const dayStart = startOfDay(parsedDate);
+
+  await prisma.attendanceApproval.upsert({
+    where: {
+      storeId_date: {
+        storeId: resolvedStoreId,
+        date: dayStart
+      }
+    },
+    update: {
+      isApproved: true,
+      approvedAt: new Date(),
+      approvedById: session.user.id
+    },
+    create: {
+      store: { connect: { id: resolvedStoreId } },
+      date: dayStart,
+      isApproved: true,
+      approvedAt: new Date(),
+      approvedBy: { connect: { id: session.user.id } }
+    }
+  });
+
+  revalidatePath("/dashboard/reports");
+}
 
 export const dynamic = "force-dynamic";
 
@@ -55,7 +107,9 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
     ? searchParams.castId
     : undefined;
 
-  const [attendances, sales, monthlyAttendances] = await Promise.all([
+  const selectedStore = selectedStoreId ? stores.find((s) => s.id === selectedStoreId) : null;
+
+  const [attendances, sales, monthlyAttendances, approvals] = await Promise.all([
     prisma.attendance.findMany({
       where: {
         timestamp: { gte: start, lt: end },
@@ -82,6 +136,13 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
       },
       include: { user: true, store: true },
       orderBy: { timestamp: "asc" }
+    }),
+    prisma.attendanceApproval.findMany({
+      where: {
+        date: { gte: monthStart, lt: addDays(monthEnd, 1) },
+        ...(selectedStoreId ? { storeId: selectedStoreId } : {})
+      },
+      include: { approvedBy: true, store: true }
     })
   ]);
 
@@ -95,6 +156,18 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
     },
     {}
   );
+
+  const approvalByDate = approvals.reduce<Record<string, (typeof approvals)[number]>>((acc, approval) => {
+    const key = `${approval.storeId}-${format(approval.date, "yyyy-MM-dd")}`;
+    acc[key] = approval;
+    return acc;
+  }, {});
+
+  const approvalKey =
+    selectedStoreId && format(start, "yyyy-MM-dd")
+      ? `${selectedStoreId}-${format(start, "yyyy-MM-dd")}`
+      : null;
+  const selectedApproval = approvalKey ? approvalByDate[approvalKey] : null;
 
   return (
     <div className="space-y-8">
@@ -149,6 +222,38 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
             </div>
             <button type="submit" className="hidden" />
           </form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>日次承認</CardTitle>
+          <CardDescription>選択された日付・店舗の勤怠を承認すると、キャスト端末からの打刻をロックします。</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {selectedStoreId ? (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-sm text-slate-200">
+                <p className="font-semibold text-pink-200">
+                  {format(start, "yyyy-MM-dd")} / {selectedStore?.name ?? "店舗不明"}
+                </p>
+                <p className="text-xs text-slate-400">
+                  {selectedApproval?.isApproved
+                    ? `承認済み (${selectedApproval.approvedAt ? format(selectedApproval.approvedAt, "PPPp", { locale: ja }) : "時刻未記録"})`
+                    : "未承認"}
+                </p>
+              </div>
+              <form action={approveAttendanceDay} className="flex items-center gap-3">
+                <input type="hidden" name="date" value={formatISO(start, { representation: "date" })} />
+                <input type="hidden" name="storeId" value={selectedStoreId} />
+                <Button type="submit" disabled={Boolean(selectedApproval?.isApproved)}>
+                  {selectedApproval?.isApproved ? "承認済み" : "この日を承認"}
+                </Button>
+              </form>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-400">店舗を選択すると日次承認を実行できます。</p>
+          )}
         </CardContent>
       </Card>
 
@@ -213,6 +318,8 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
             {calendarDays.map((day) => {
               const key = format(day, "yyyy-MM-dd");
               const dayAttendances = attendanceByDate[key] ?? [];
+              const approvalKeyForDay = selectedStoreId ? `${selectedStoreId}-${key}` : null;
+              const approvalForDay = approvalKeyForDay ? approvalByDate[approvalKeyForDay] : null;
 
               return (
                 <div
@@ -223,6 +330,9 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
                     <p className="text-sm font-semibold text-pink-200">{format(day, "M/d")}</p>
                     <p className="text-[11px] text-slate-500">{format(day, "EEE", { locale: ja })}</p>
                   </div>
+                  {approvalForDay?.isApproved ? (
+                    <p className="mt-1 rounded-full bg-pink-900/50 px-2 py-1 text-[11px] text-pink-200">承認済</p>
+                  ) : null}
                   <div className="mt-2 space-y-1">
                     {dayAttendances.length === 0 ? (
                       <p className="text-slate-600">出勤なし</p>
