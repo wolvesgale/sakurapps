@@ -87,6 +87,27 @@ Prisma のマイグレーションは CI/CD で実行するか、デプロイ後
 - `/dashboard/terminal-mgmt` – 店舗端末許可リストの管理（管理画面側のルート。`(dashboard)` グループ内に配置し、キャスト用 `/terminal` と URL が重複しないように分離）
 - `/terminal` – 店舗端末向けキャスト打刻/売上画面（端末IDを照合。ログイン不要）
 
+## ルーティングとフォルダ構成
+
+`/terminal`（キャスト端末向け）と `/dashboard/terminal-mgmt`（管理画面向け端末管理）の URL が衝突しないよう、フォルダ構成を以下に統一しています。
+
+```
+app/
+├── (dashboard)/
+│   ├── dashboard/
+│   │   ├── page.tsx
+│   │   └── terminal-mgmt/
+│   │       └── page.tsx   # /dashboard/terminal-mgmt
+│   ├── reports/
+│   ├── staff/
+│   └── stores/
+├── terminal/               # /terminal（キャスト端末UI）
+├── login/                  # /login（管理者系ログイン）
+└── page.tsx                # ルート（ログインへリダイレクト）
+```
+
+`app/(dashboard)/terminal` 配下の旧ディレクトリは削除済みです。同名パスを生成するフォルダが残っていないかを `find app -path "*terminal*"` などで確認してください。
+
 ## 補足
 
 - Prisma のスキーマは `prisma/schema.prisma` に、初回テーブル作成用の SQL は `docs/sql/schema.sql` に配置しています。
