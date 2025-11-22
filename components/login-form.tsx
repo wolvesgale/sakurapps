@@ -54,6 +54,9 @@ export function LoginForm() {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
+        <p className="text-xs text-slate-400">
+          OWNER / ADMIN / DRIVER は 8文字以上で大文字・小文字・数字を含むパスワードを使用してください。
+        </p>
       </div>
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
       <Button type="submit" className="w-full" disabled={loading}>

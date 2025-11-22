@@ -4,7 +4,7 @@ import { hash } from "bcryptjs";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
-import { hashPassword } from "@/lib/auth";
+import { hashPassword, isStrongPassword } from "@/lib/auth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -89,6 +89,9 @@ async function createStaff(formData: FormData) {
   } else {
     if (rawPassword.length === 0) {
       throw new Error("パスワードを入力してください");
+    }
+    if (!isStrongPassword(rawPassword)) {
+      throw new Error("8文字以上・大文字・小文字・数字を含むパスワードを設定してください");
     }
     data.passwordHash = await hashPassword(rawPassword);
   }

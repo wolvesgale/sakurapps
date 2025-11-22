@@ -1,10 +1,10 @@
 import { redirect } from "next/navigation";
-import { addDays, formatISO, startOfDay } from "date-fns";
+import { addDays, eachDayOfInterval, endOfMonth, formatISO, startOfDay, startOfMonth } from "date-fns";
 import { ja } from "date-fns/locale";
 import { format } from "date-fns";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -33,6 +33,8 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
   const selectedDate = new Date(dateParam);
   const start = startOfDay(selectedDate);
   const end = addDays(start, 1);
+  const monthStart = startOfMonth(selectedDate);
+  const monthEnd = endOfMonth(selectedDate);
 
   const selectedStoreId =
     session.user.role === "ADMIN" ? session.user.storeId ?? undefined : searchParams?.storeId;
@@ -53,7 +55,7 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
     ? searchParams.castId
     : undefined;
 
-  const [attendances, sales] = await Promise.all([
+  const [attendances, sales, monthlyAttendances] = await Promise.all([
     prisma.attendance.findMany({
       where: {
         timestamp: { gte: start, lt: end },
@@ -71,10 +73,28 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
       },
       include: { user: true, store: true },
       orderBy: { createdAt: "desc" }
+    }),
+    prisma.attendance.findMany({
+      where: {
+        timestamp: { gte: monthStart, lt: addDays(monthEnd, 1) },
+        ...(selectedStoreId ? { storeId: selectedStoreId } : {}),
+        ...(selectedCastId ? { userId: selectedCastId } : {})
+      },
+      include: { user: true, store: true },
+      orderBy: { timestamp: "asc" }
     })
   ]);
 
   const salesTotal = sales.reduce((sum, sale) => sum + sale.amount, 0);
+  const calendarDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
+  const attendanceByDate = monthlyAttendances.reduce<Record<string, typeof monthlyAttendances[number][]>>(
+    (acc, record) => {
+      const key = format(record.timestamp, "yyyy-MM-dd");
+      acc[key] = acc[key] ? [...acc[key], record] : [record];
+      return acc;
+    },
+    {}
+  );
 
   return (
     <div className="space-y-8">
@@ -180,6 +200,49 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>給与計算 (カレンダー表示)</CardTitle>
+          <CardDescription>
+            店舗端末の勤怠はオーナーの日次締め後にキャストから変更できません。日ごとの出勤をカレンダーで確認してください。
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+            {calendarDays.map((day) => {
+              const key = format(day, "yyyy-MM-dd");
+              const dayAttendances = attendanceByDate[key] ?? [];
+
+              return (
+                <div
+                  key={key}
+                  className="rounded-lg border border-slate-800 bg-black/70 p-3 text-xs text-slate-200"
+                >
+                  <div className="flex items-baseline justify-between">
+                    <p className="text-sm font-semibold text-pink-200">{format(day, "M/d")}</p>
+                    <p className="text-[11px] text-slate-500">{format(day, "EEE", { locale: ja })}</p>
+                  </div>
+                  <div className="mt-2 space-y-1">
+                    {dayAttendances.length === 0 ? (
+                      <p className="text-slate-600">出勤なし</p>
+                    ) : (
+                      dayAttendances.slice(0, 3).map((attendance) => (
+                        <p key={attendance.id} className="leading-snug">
+                          {attendance.user.displayName} / {attendance.store?.name ?? "店舗不明"}
+                        </p>
+                      ))
+                    )}
+                    {dayAttendances.length > 3 ? (
+                      <p className="text-slate-500">+{dayAttendances.length - 3} 件</p>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

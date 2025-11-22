@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { verifyTerminalAccess } from "@/lib/terminal";
 
 const allowedTypes = ["CLOCK_IN", "CLOCK_OUT", "BREAK_START", "BREAK_END"] as const;
 
@@ -9,14 +10,21 @@ type AttendanceType = (typeof allowedTypes)[number];
 
 export async function POST(request: Request) {
   try {
-    const { userId, storeId, type } = (await request.json()) as {
+    const { userId, storeId, terminalId, type } = (await request.json()) as {
       userId?: string;
       storeId?: string;
+      terminalId?: string;
       type?: AttendanceType;
     };
 
-    if (!userId || !type || !allowedTypes.includes(type)) {
+    if (!userId || !type || !allowedTypes.includes(type) || !storeId || !terminalId) {
       return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+    }
+
+    const terminal = await verifyTerminalAccess(storeId, terminalId);
+
+    if (!terminal) {
+      return NextResponse.json({ error: "Unauthorized terminal" }, { status: 403 });
     }
 
     const cast = await prisma.user.findFirst({
@@ -40,6 +48,10 @@ export async function POST(request: Request) {
 
     if (!targetStoreId) {
       return NextResponse.json({ error: "Store not found" }, { status: 400 });
+    }
+
+    if (terminal.storeId !== targetStoreId) {
+      return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
     }
 
     const attendance = await prisma.attendance.create({

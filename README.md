@@ -48,7 +48,15 @@ Next.js 14 (App Router) + Prisma + NextAuth で構築した、ガールズバー
 
    `.env` に設定した `SEED_OWNER_USERNAME` と `SEED_OWNER_PASSWORD` を利用して OWNER ユーザーが1件作成されます（すでに存在する場合は再作成されません）。
 
-5. 開発サーバーを起動します。
+   OWNER / ADMIN / DRIVER アカウントのパスワードは 8文字以上・大文字・小文字・数字を含めてください。
+
+5. 店舗端末を登録します（管理画面 > 店舗管理）。
+
+   - 端末ごとに発行したい ID（UUID など）を入力し、紐づけ店舗を選択して登録します。
+   - 店舗端末 UI (`/terminal`) では起動時に端末ID + 店舗ID を送信し、許可リストと照合します。
+   - 許可されていない端末からの打刻/売上登録は拒否されます。
+
+6. 開発サーバーを起動します。
 
    ```bash
    npm run dev
@@ -70,14 +78,21 @@ Prisma のマイグレーションは CI/CD で実行するか、デプロイ後
 - `POST /api/terminal/verify-pin` – キャスト PIN 検証
 - `POST /api/terminal/attendance` – 勤怠レコード登録
 - `POST /api/terminal/sales` – 売上レコード登録
+- `POST /api/terminal/authorize` – 端末ID + 店舗ID の照合
 - `/login` – オーナー/管理者/ドライバー向けログインフォーム
 - `/dashboard` – ロール別ダッシュボード
 - `/stores` – オーナー向け店舗管理
 - `/staff` – オーナー/管理者向けキャスト・ドライバー管理
 - `/reports` – 勤怠・売上レポート
-- `/terminal` – 店舗端末向けキャスト打刻/売上画面
+- `/terminal` – 店舗端末向けキャスト打刻/売上画面（端末IDを照合）
 
 ## 補足
 
 - Prisma のスキーマは `prisma/schema.prisma` に、初回テーブル作成用の SQL は `docs/sql/schema.sql` に配置しています。
 - Tailwind CSS と shadcn/ui コンポーネントを共用し、タブレット端末での操作を想定した UI を提供しています。
+
+## 端末固定化と UI のポイント
+
+- 店舗端末はログイン不要ですが、起動時に店舗IDと端末IDを送信し、登録済み端末かをサーバーで検証します。
+- キャストは端末認証後に表示されるキャスト一覧から選択し、PIN を入力して打刻・売上登録を行います。
+- 給与計算向けの勤怠カレンダーをレポート画面に追加し、日次締め後の編集を防ぐ運用を想定しています。

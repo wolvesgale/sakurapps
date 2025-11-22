@@ -8,6 +8,16 @@ CREATE TABLE "Store" (
     "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE "Terminal" (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+    "deviceId" TEXT NOT NULL UNIQUE,
+    label TEXT,
+    "storeId" TEXT NOT NULL REFERENCES "Store"(id) ON DELETE CASCADE,
+    "isActive" BOOLEAN NOT NULL DEFAULT TRUE,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TYPE "Role" AS ENUM ('OWNER', 'ADMIN', 'DRIVER', 'CAST');
 CREATE TYPE "AttendanceType" AS ENUM ('CLOCK_IN', 'CLOCK_OUT', 'BREAK_START', 'BREAK_END');
 CREATE TYPE "SaleCategory" AS ENUM ('SET', 'DRINK', 'BOTTLE', 'OTHER');
@@ -57,3 +67,4 @@ CREATE INDEX "Attendance_storeId_idx" ON "Attendance"("storeId");
 CREATE INDEX "Sale_storeId_createdAt_idx" ON "Sale"("storeId", "createdAt");
 CREATE INDEX "Sale_userId_idx" ON "Sale"("userId");
 CREATE INDEX "Ride_driverId_idx" ON "Ride"("driverId");
+CREATE INDEX "Terminal_storeId_idx" ON "Terminal"("storeId");

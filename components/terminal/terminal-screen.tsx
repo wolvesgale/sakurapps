@@ -33,10 +33,12 @@ type SaleCategory = "SET" | "DRINK" | "BOTTLE" | "OTHER";
 
 export function TerminalScreen({
   stores,
-  defaultStoreId
+  defaultStoreId,
+  defaultTerminalId
 }: {
   stores: TerminalStore[];
   defaultStoreId?: string | null;
+  defaultTerminalId?: string | null;
 }) {
   const [selectedStoreId, setSelectedStoreId] = useState(
     defaultStoreId ?? stores[0]?.id ?? ""
@@ -45,8 +47,12 @@ export function TerminalScreen({
   const [pin, setPin] = useState("");
   const [pinValid, setPinValid] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [terminalMessage, setTerminalMessage] = useState<string | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isCheckingTerminal, setIsCheckingTerminal] = useState(false);
+  const [terminalId, setTerminalId] = useState(defaultTerminalId ?? "");
+  const [authorizedStoreId, setAuthorizedStoreId] = useState<string | null>(null);
   const [saleTable, setSaleTable] = useState("");
   const [saleCategory, setSaleCategory] = useState<SaleCategory>("SET");
   const [saleAmount, setSaleAmount] = useState("0");
@@ -73,12 +79,17 @@ export function TerminalScreen({
 
   useEffect(() => {
     let cancelled = false;
-    if (pin.length === 4 && selectedCastId) {
+    if (pin.length === 4 && selectedCastId && authorizedStoreId && terminalId) {
       setIsVerifying(true);
       fetch("/api/terminal/verify-pin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: selectedCastId, pin, storeId: selectedStoreId })
+        body: JSON.stringify({
+          userId: selectedCastId,
+          pin,
+          storeId: authorizedStoreId,
+          terminalId
+        })
       })
         .then((res) => res.json())
         .then((data) => {
@@ -109,11 +120,39 @@ export function TerminalScreen({
     return () => {
       cancelled = true;
     };
-  }, [pin, selectedCastId, selectedStoreId]);
+  }, [authorizedStoreId, pin, selectedCastId, terminalId]);
+
+  const handleAuthorizeTerminal = async () => {
+    if (!selectedStoreId || !terminalId) {
+      setTerminalMessage("店舗と端末IDを入力してください");
+      return;
+    }
+    setIsCheckingTerminal(true);
+    setTerminalMessage(null);
+    try {
+      const res = await fetch("/api/terminal/authorize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storeId: selectedStoreId, terminalId })
+      });
+      const body = await res.json();
+      if (!res.ok || !body.authorized) {
+        throw new Error(body.error ?? "端末が許可されていません");
+      }
+      setAuthorizedStoreId(body.store.id);
+      setSelectedStoreId(body.store.id);
+      setTerminalMessage(`端末認証済み (${body.store.name})`);
+    } catch (error) {
+      setAuthorizedStoreId(null);
+      setTerminalMessage((error as Error).message);
+    } finally {
+      setIsCheckingTerminal(false);
+    }
+  };
 
   const handleAttendance = async (type: AttendanceAction) => {
-    if (!pinValid || !selectedCastId || !selectedStoreId) {
-      setStatusMessage("キャスト選択とPIN確認を行ってください");
+    if (!pinValid || !selectedCastId || !authorizedStoreId || !terminalId) {
+      setStatusMessage("端末認証とキャスト選択、PIN確認を行ってください");
       return;
     }
     setIsSubmitting(true);
@@ -122,7 +161,12 @@ export function TerminalScreen({
       const res = await fetch("/api/terminal/attendance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: selectedCastId, storeId: selectedStoreId, type })
+        body: JSON.stringify({
+          userId: selectedCastId,
+          storeId: authorizedStoreId,
+          terminalId,
+          type
+        })
       });
       if (!res.ok) {
         const body = await res.json();
@@ -137,8 +181,8 @@ export function TerminalScreen({
   };
 
   const handleSale = async () => {
-    if (!pinValid || !selectedCastId || !selectedStoreId) {
-      setStatusMessage("キャスト選択とPIN確認を行ってください");
+    if (!pinValid || !selectedCastId || !authorizedStoreId || !terminalId) {
+      setStatusMessage("端末認証とキャスト選択、PIN確認を行ってください");
       return;
     }
     const amount = Number(saleAmount);
@@ -154,7 +198,8 @@ export function TerminalScreen({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: selectedCastId,
-          storeId: selectedStoreId,
+          storeId: authorizedStoreId,
+          terminalId,
           tableNumber: saleTable,
           category: saleCategory,
           amount
@@ -178,7 +223,7 @@ export function TerminalScreen({
 
   return (
     <div className="space-y-8">
-      <section className="rounded-3xl border border-pink-500/40 bg-slate-900/80 p-6 shadow-lg">
+      <section className="rounded-3xl border border-slate-800 bg-black/80 p-6 shadow-lg">
         <div className="flex flex-col gap-2 text-center">
           <p className="text-sm text-slate-300">{formattedDate}</p>
           <h1 className="text-3xl font-semibold text-pink-300">
@@ -191,10 +236,14 @@ export function TerminalScreen({
       </section>
 
       <section className="grid gap-6 md:grid-cols-2">
-        <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+        <div className="space-y-4 rounded-2xl border border-slate-800 bg-black/70 p-6">
           <div className="space-y-2">
             <Label>店舗選択</Label>
-            <Select value={selectedStoreId} onValueChange={setSelectedStoreId}>
+            <Select
+              value={selectedStoreId}
+              onValueChange={setSelectedStoreId}
+              disabled={Boolean(authorizedStoreId)}
+            >
               <SelectTrigger>
                 <SelectValue placeholder="店舗を選択" />
               </SelectTrigger>
@@ -206,11 +255,43 @@ export function TerminalScreen({
                 ))}
               </SelectContent>
             </Select>
+            <p className="text-xs text-slate-500">端末登録された店舗のみ利用できます。</p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="terminalId">端末ID</Label>
+            <div className="flex gap-2">
+              <Input
+                id="terminalId"
+                value={terminalId}
+                onChange={(event) => setTerminalId(event.target.value.trim())}
+                placeholder="端末ごとの登録ID"
+                className="flex-1"
+              />
+              <Button
+                type="button"
+                onClick={handleAuthorizeTerminal}
+                disabled={isCheckingTerminal}
+                variant="secondary"
+              >
+                {isCheckingTerminal ? "確認中" : "認証"}
+              </Button>
+            </div>
+            <p className="text-xs text-slate-400">
+              起動時に店舗IDと端末IDを照合します。
+            </p>
+            {terminalMessage ? (
+              <p className="text-xs text-pink-300">{terminalMessage}</p>
+            ) : null}
           </div>
 
           <div className="space-y-2">
             <Label>キャスト選択</Label>
-            <Select value={selectedCastId} onValueChange={setSelectedCastId}>
+            <Select
+              value={selectedCastId}
+              onValueChange={setSelectedCastId}
+              disabled={!authorizedStoreId}
+            >
               <SelectTrigger>
                 <SelectValue placeholder="キャストを選択" />
               </SelectTrigger>
@@ -232,7 +313,7 @@ export function TerminalScreen({
               inputMode="numeric"
               maxLength={4}
               placeholder="****"
-              className="text-center text-2xl tracking-[0.4em]"
+              className="text-center text-2xl tracking-[0.4em] bg-slate-950"
             />
             <p className="text-xs text-slate-400">
               PINが正しい場合のみボタンが有効になります。
@@ -242,7 +323,7 @@ export function TerminalScreen({
           <div className="grid grid-cols-2 gap-3 text-lg font-semibold">
             <Button
               className="h-16 text-lg"
-              disabled={!pinValid || isSubmitting || isVerifying}
+              disabled={!pinValid || isSubmitting || isVerifying || !authorizedStoreId}
               onClick={() => handleAttendance("CLOCK_IN")}
             >
               出勤
@@ -250,7 +331,7 @@ export function TerminalScreen({
             <Button
               className="h-16 text-lg"
               variant="secondary"
-              disabled={!pinValid || isSubmitting || isVerifying}
+              disabled={!pinValid || isSubmitting || isVerifying || !authorizedStoreId}
               onClick={() => handleAttendance("CLOCK_OUT")}
             >
               退勤
@@ -258,7 +339,7 @@ export function TerminalScreen({
             <Button
               className="h-16 text-lg"
               variant="secondary"
-              disabled={!pinValid || isSubmitting || isVerifying}
+              disabled={!pinValid || isSubmitting || isVerifying || !authorizedStoreId}
               onClick={() => handleAttendance("BREAK_START")}
             >
               休憩開始
@@ -266,7 +347,7 @@ export function TerminalScreen({
             <Button
               className="h-16 text-lg"
               variant="secondary"
-              disabled={!pinValid || isSubmitting || isVerifying}
+              disabled={!pinValid || isSubmitting || isVerifying || !authorizedStoreId}
               onClick={() => handleAttendance("BREAK_END")}
             >
               休憩終了
@@ -274,7 +355,7 @@ export function TerminalScreen({
           </div>
         </div>
 
-        <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+        <div className="space-y-4 rounded-2xl border border-slate-800 bg-black/70 p-6">
           <h2 className="text-xl font-semibold text-pink-200">売上入力</h2>
           <div className="space-y-2">
             <Label htmlFor="table">卓番/伝票番号</Label>
@@ -310,7 +391,7 @@ export function TerminalScreen({
           </div>
           <Button
             className="h-14 w-full text-lg"
-            disabled={!pinValid || isSubmitting || isVerifying}
+            disabled={!pinValid || isSubmitting || isVerifying || !authorizedStoreId}
             onClick={handleSale}
           >
             売上を登録

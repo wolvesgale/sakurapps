@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma";
-import { hashPassword } from "../lib/auth";
+import { hashPassword, isStrongPassword } from "../lib/auth";
 
 async function main() {
   const username = process.env.SEED_OWNER_USERNAME;
@@ -8,6 +8,10 @@ async function main() {
 
   if (!username || !password) {
     throw new Error("SEED_OWNER_USERNAME と SEED_OWNER_PASSWORD を設定してください");
+  }
+
+  if (!isStrongPassword(password)) {
+    throw new Error("SEED_OWNER_PASSWORD は8文字以上で大文字・小文字・数字を含めてください");
   }
 
   const passwordHash = await hashPassword(password);

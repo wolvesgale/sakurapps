@@ -85,3 +85,10 @@ export const authOptions: NextAuthOptions = {
 export async function hashPassword(password: string) {
   return hash(password, 10);
 }
+
+export function isStrongPassword(password: string) {
+  const hasUpper = /[A-Z]/.test(password);
+  const hasLower = /[a-z]/.test(password);
+  const hasNumber = /[0-9]/.test(password);
+  return password.length >= 8 && hasUpper && hasLower && hasNumber;
+}

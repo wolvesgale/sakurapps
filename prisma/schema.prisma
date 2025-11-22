@@ -61,6 +61,7 @@ model Store {
   attendances Attendance[]
   sales       Sale[]
   rides       Ride[]
+  terminals   Terminal[]
 }
 
 model Attendance {
@@ -96,4 +97,16 @@ model Ride {
 
   driver User  @relation("DriverRides", fields: [driverId], references: [id])
   store  Store? @relation(fields: [storeId], references: [id])
+}
+
+model Terminal {
+  id        String   @id @default(cuid())
+  deviceId  String   @unique
+  label     String?
+  storeId   String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id])
 }
