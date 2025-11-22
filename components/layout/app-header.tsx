@@ -11,7 +11,7 @@ const links = [
   { href: "/stores", label: "店舗" },
   { href: "/staff", label: "スタッフ" },
   { href: "/reports", label: "レポート" },
-  { href: "/terminal", label: "店舗端末" }
+  { href: "/terminal-mgmt", label: "端末管理" }
 ];
 
 export function AppHeader() {
@@ -29,11 +29,11 @@ export function AppHeader() {
           <nav className="flex items-center gap-4 text-slate-300">
             {links
               .filter((link) => {
-                if (link.href === "/stores" && role !== "OWNER") return false;
+                if (link.href === "/stores" && !["OWNER", "ADMIN"].includes(role ?? "")) return false;
                 if (link.href === "/staff" && role === "DRIVER") return false;
                 if (link.href === "/reports" && role === "DRIVER") return false;
-                if (link.href === "/terminal" && role === "DRIVER") return false;
-                if (link.href === "/terminal" && role === "CAST") return false;
+                if (link.href === "/terminal-mgmt" && role === "DRIVER") return false;
+                if (link.href === "/terminal-mgmt" && role === "CAST") return false;
                 return true;
               })
               .map((link) => (
