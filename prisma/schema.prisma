@@ -21,11 +21,10 @@ enum AttendanceType {
   BREAK_END
 }
 
-enum SaleCategory {
-  SET
-  DRINK
-  BOTTLE
-  OTHER
+enum PaymentMethod {
+  CASH
+  PAYPAY
+  CARD
 }
 
 model User {
@@ -43,7 +42,7 @@ model User {
   updatedAt    DateTime        @updatedAt
 
   attendances  Attendance[]
-  sales        Sale[]
+  sales        Sale[]        @relation("UserSales")
   rides        Ride[]          @relation("DriverRides")
   approvedDays AttendanceApproval[] @relation("AttendanceApprovalApprovedBy")
 }
@@ -72,6 +71,7 @@ model Attendance {
   storeId   String
   type      AttendanceType
   timestamp DateTime        @default(now())
+  isCompanion Boolean       @default(false)
 
   user  User  @relation(fields: [userId], references: [id])
   store Store @relation(fields: [storeId], references: [id])
@@ -92,15 +92,14 @@ model AttendanceApproval {
 }
 
 model Sale {
-  id          String       @id @default(cuid())
-  userId      String
-  storeId     String
-  tableNumber String
-  category    SaleCategory
-  amount      Int
-  createdAt   DateTime     @default(now())
+  id            String         @id @default(cuid())
+  staffId       String
+  storeId       String
+  paymentMethod PaymentMethod
+  amount        Int
+  createdAt     DateTime       @default(now())
 
-  user  User  @relation(fields: [userId], references: [id])
+  staff User  @relation("UserSales", fields: [staffId], references: [id])
   store Store @relation(fields: [storeId], references: [id])
 }
 

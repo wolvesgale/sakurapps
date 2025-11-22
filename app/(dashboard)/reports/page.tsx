@@ -4,6 +4,7 @@ import { ja } from "date-fns/locale";
 import { format } from "date-fns";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
+import { getOrCreateDefaultStore } from "@/lib/store";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,6 +28,7 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
     redirect("/dashboard");
   }
 
+  const defaultStore = await getOrCreateDefaultStore();
   const stores = await prisma.store.findMany({ orderBy: { name: "asc" } });
 
   const dateParam = searchParams?.date ?? formatISO(new Date(), { representation: "date" });
@@ -43,10 +45,7 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
     where: {
       role: "CAST",
       isActive: true,
-      ...(selectedStoreId ? { storeId: selectedStoreId } : {}),
-      ...(session.user.role === "ADMIN" && session.user.storeId
-        ? { storeId: session.user.storeId }
-        : {})
+      storeId: selectedStoreId ?? defaultStore.id
     },
     orderBy: { displayName: "asc" }
   });
@@ -59,7 +58,7 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
     prisma.attendance.findMany({
       where: {
         timestamp: { gte: start, lt: end },
-        ...(selectedStoreId ? { storeId: selectedStoreId } : {}),
+        storeId: selectedStoreId ?? defaultStore.id,
         ...(selectedCastId ? { userId: selectedCastId } : {})
       },
       include: { user: true, store: true },
@@ -69,15 +68,16 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
       where: {
         createdAt: { gte: start, lt: end },
         ...(selectedStoreId ? { storeId: selectedStoreId } : {}),
-        ...(selectedCastId ? { userId: selectedCastId } : {})
+        ...(selectedCastId ? { staffId: selectedCastId } : {}),
+        storeId: selectedStoreId ?? defaultStore.id
       },
-      include: { user: true, store: true },
+      include: { staff: true, store: true },
       orderBy: { createdAt: "desc" }
     }),
     prisma.attendance.findMany({
       where: {
         timestamp: { gte: monthStart, lt: addDays(monthEnd, 1) },
-        ...(selectedStoreId ? { storeId: selectedStoreId } : {}),
+        storeId: selectedStoreId ?? defaultStore.id,
         ...(selectedCastId ? { userId: selectedCastId } : {})
       },
       include: { user: true, store: true },
@@ -186,13 +186,12 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
               <ul className="space-y-2 text-sm">
                 {sales.map((sale) => (
                   <li key={sale.id} className="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
-                    <p className="font-semibold text-pink-200">{sale.user.displayName}</p>
+                    <p className="font-semibold text-pink-200">{sale.staff?.displayName ?? "キャスト不明"}</p>
                     <p className="text-xs text-slate-400">{sale.store?.name ?? "店舗不明"}</p>
                     <p className="text-xs text-slate-500">
-                      {format(sale.createdAt, "PPPp", { locale: ja })} / 区分: {sale.category}
+                      {format(sale.createdAt, "PPPp", { locale: ja })} / 支払方法: {sale.paymentMethod}
                     </p>
                     <p className="text-sm text-slate-200">金額: {formatCurrency(sale.amount)}</p>
-                    <p className="text-xs text-slate-500">卓番: {sale.tableNumber || "-"}</p>
                   </li>
                 ))}
               </ul>

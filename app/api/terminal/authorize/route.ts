@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
+import { getOrCreateDefaultStore } from "@/lib/store";
 
 export async function POST(request: Request) {
   const { storeId, terminalId } = await request
@@ -10,7 +11,9 @@ export async function POST(request: Request) {
     terminalId?: string | null;
   };
 
-  const fallbackStoreId = storeId ?? "dev-store";
+  const fallbackStore = storeId
+    ? { id: storeId }
+    : await getOrCreateDefaultStore();
   const fallbackTerminalId = terminalId ?? "dev-device";
 
   return NextResponse.json({
@@ -18,7 +21,7 @@ export async function POST(request: Request) {
     terminal: {
       id: "dev-terminal",
       deviceId: fallbackTerminalId,
-      storeId: fallbackStoreId
+      storeId: fallbackStore.id
     }
   });
 }

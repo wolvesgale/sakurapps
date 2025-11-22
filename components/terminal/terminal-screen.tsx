@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
@@ -19,180 +19,117 @@ export type TerminalCast = {
   displayName: string;
 };
 
-export type TerminalStore = {
-  id: string;
+type StoreInfo = {
+  id: string | null;
   name: string;
-  openingTime: string | null;
-  closingTime: string | null;
-  casts: TerminalCast[];
+  openingTime?: string | null;
+  closingTime?: string | null;
+};
+
+type ActiveStaff = {
+  id: string;
+  displayName: string;
+  clockInAt: string | null;
+  isCompanion: boolean;
 };
 
 type AttendanceAction = "CLOCK_IN" | "CLOCK_OUT" | "BREAK_START" | "BREAK_END";
 
-type SaleCategory = "SET" | "DRINK" | "BOTTLE" | "OTHER";
+type PaymentMethod = "CASH" | "PAYPAY" | "CARD";
 
-const fallbackStore: TerminalStore = {
-  id: "dev-store",
-  name: "開発店舗",
-  openingTime: null,
-  closingTime: null,
-  casts: []
-};
+const FALLBACK_STORE_NAME = "Nest SAKURA";
 
 export function TerminalScreen() {
-  const [stores, setStores] = useState<TerminalStore[]>([fallbackStore]);
-  const [selectedStoreId, setSelectedStoreId] = useState(fallbackStore.id);
+  const [store, setStore] = useState<StoreInfo | null>(null);
+  const [casts, setCasts] = useState<TerminalCast[]>([]);
   const [selectedCastId, setSelectedCastId] = useState<string>("");
-  const [pin, setPin] = useState("");
-  const [pinValid, setPinValid] = useState(false);
+  const [saleCastId, setSaleCastId] = useState<string>("");
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [terminalMessage, setTerminalMessage] = useState<string | null>(null);
-  const [isVerifying, setIsVerifying] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isCheckingTerminal, setIsCheckingTerminal] = useState(false);
-  const [terminalId, setTerminalId] = useState("dev-terminal");
-  const [authorizedStoreId, setAuthorizedStoreId] = useState<string | null>(
-    fallbackStore.id
+  const [currentTime, setCurrentTime] = useState<string>(
+    format(new Date(), "yyyy年MM月dd日(E) HH:mm:ss", { locale: ja })
   );
-  const [saleTable, setSaleTable] = useState("");
-  const [saleCategory, setSaleCategory] = useState<SaleCategory>("SET");
+  const [companionChecked, setCompanionChecked] = useState(false);
+  const [salePayment, setSalePayment] = useState<PaymentMethod>("CASH");
   const [saleAmount, setSaleAmount] = useState("0");
+  const [activeStaff, setActiveStaff] = useState<ActiveStaff[]>([]);
+  const [isLoadingStore, setIsLoadingStore] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
+    const interval = setInterval(() => {
+      setCurrentTime(format(new Date(), "yyyy年MM月dd日(E) HH:mm:ss", { locale: ja }));
+    }, 1000);
 
-    const loadStores = async () => {
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const fetchStore = async () => {
+      setIsLoadingStore(true);
       try {
-        const res = await fetch("/api/terminal/stores", { cache: "no-store" });
-        const body = (await res.json()) as { stores?: TerminalStore[] };
-
-        if (!cancelled) {
-          const nextStores = body.stores?.length
-            ? body.stores
-            : [fallbackStore];
-          const firstStoreId = nextStores[0]?.id ?? fallbackStore.id;
-          setStores(nextStores);
-          setSelectedStoreId(firstStoreId);
-          setAuthorizedStoreId(firstStoreId);
+        const response = await fetch("/api/terminal/stores");
+        if (!response.ok) {
+          throw new Error("店舗情報を取得できませんでした");
+        }
+        const body = (await response.json()) as {
+          stores?: { id: string; name: string; openingTime?: string | null; closingTime?: string | null; casts?: TerminalCast[] }[];
+        };
+        const firstStore = body.stores?.[0];
+        if (firstStore) {
+          setStore({
+            id: firstStore.id,
+            name: firstStore.name,
+            openingTime: firstStore.openingTime,
+            closingTime: firstStore.closingTime
+          });
+          setCasts(firstStore.casts ?? []);
+        } else {
+          setStore({ id: null, name: FALLBACK_STORE_NAME, openingTime: null, closingTime: null });
+          setCasts([]);
         }
       } catch (error) {
-        console.error("[terminal-screen] failed to load stores", error);
-        if (!cancelled) {
-          setStores([fallbackStore]);
-          setSelectedStoreId(fallbackStore.id);
-          setAuthorizedStoreId(fallbackStore.id);
-          setTerminalMessage("店舗情報の取得に失敗しました (開発用ストアで継続)");
-        }
+        console.error(error);
+        setStore({ id: null, name: FALLBACK_STORE_NAME, openingTime: null, closingTime: null });
+        setCasts([]);
+      } finally {
+        setIsLoadingStore(false);
       }
     };
 
-    loadStores();
-
-    return () => {
-      cancelled = true;
-    };
+    fetchStore();
   }, []);
 
-  const store = useMemo(
-    () => stores.find((s) => s.id === selectedStoreId) ?? null,
-    [selectedStoreId, stores]
-  );
-
-  const casts = store?.casts ?? [];
-
   useEffect(() => {
-    setSelectedCastId("");
-    setPin("");
-    setPinValid(false);
-    setStatusMessage(null);
-    setAuthorizedStoreId(selectedStoreId || fallbackStore.id);
-  }, [selectedStoreId]);
+    if (!store?.id) return;
 
-  useEffect(() => {
-    setPin("");
-    setPinValid(false);
-    setStatusMessage(null);
-  }, [selectedCastId]);
+    let interval: ReturnType<typeof setInterval> | null = null;
 
-  useEffect(() => {
-    let cancelled = false;
-    const targetStoreId = authorizedStoreId ?? selectedStoreId ?? fallbackStore.id;
-    const targetTerminalId = terminalId || "dev-terminal";
+    const fetchActive = async () => {
+      try {
+        const response = await fetch(`/api/terminal/active-staff?storeId=${store.id}`);
+        if (!response.ok) {
+          throw new Error("出勤中メンバーの取得に失敗しました");
+        }
+        const body = (await response.json()) as { activeStaff?: ActiveStaff[] };
+        setActiveStaff(body.activeStaff ?? []);
+      } catch (error) {
+        console.error(error);
+      }
+    };
 
-    if (pin.length === 4 && selectedCastId && targetStoreId) {
-      setIsVerifying(true);
-      fetch("/api/terminal/verify-pin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: selectedCastId,
-          pin,
-          storeId: targetStoreId,
-          terminalId: targetTerminalId
-        })
-      })
-        .then((res) => res.json())
-        .then((data) => {
-          if (!cancelled) {
-            const valid = data.valid ?? true;
-            setPinValid(Boolean(valid));
-            setStatusMessage(valid ? null : "PINが正しくありません");
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setStatusMessage("PIN確認をスキップしました");
-            setPinValid(true);
-          }
-        })
-        .finally(() => {
-          if (!cancelled) {
-            setIsVerifying(false);
-          }
-        });
-    } else {
-      setPinValid(false);
-    }
+    fetchActive();
+    interval = setInterval(fetchActive, 30000);
 
     return () => {
-      cancelled = true;
+      if (interval) {
+        clearInterval(interval);
+      }
     };
-  }, [authorizedStoreId, pin, selectedCastId, selectedStoreId, terminalId]);
-
-  const handleAuthorizeTerminal = async () => {
-    const targetStoreId = selectedStoreId || fallbackStore.id;
-    const targetTerminalId = terminalId || "dev-terminal";
-    setIsCheckingTerminal(true);
-    setTerminalMessage(null);
-    try {
-      const res = await fetch("/api/terminal/authorize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storeId: targetStoreId, terminalId: targetTerminalId })
-      });
-      const body = await res.json().catch(() => null);
-      const nextStoreId = body?.terminal?.storeId ?? targetStoreId;
-      const nextTerminalId = body?.terminal?.deviceId ?? targetTerminalId;
-
-      setAuthorizedStoreId(nextStoreId);
-      setSelectedStoreId(nextStoreId);
-      setTerminalId(nextTerminalId);
-      setTerminalMessage("端末チェックをスキップして利用中 (開発モード)");
-    } catch (error) {
-      console.error("[terminal-screen] authorize skip", error);
-      setAuthorizedStoreId(targetStoreId);
-      setTerminalId(targetTerminalId);
-      setTerminalMessage("端末チェックをスキップして利用中 (開発モード)");
-    } finally {
-      setIsCheckingTerminal(false);
-    }
-  };
+  }, [store?.id]);
 
   const handleAttendance = async (type: AttendanceAction) => {
-    const targetStoreId = authorizedStoreId ?? selectedStoreId ?? fallbackStore.id;
-    const targetTerminalId = terminalId || "dev-terminal";
-    if (!pinValid || !selectedCastId) {
-      setStatusMessage("キャスト選択とPIN確認を行ってください");
+    if (!selectedCastId) {
+      setStatusMessage("キャストを選択してください");
       return;
     }
     setIsSubmitting(true);
@@ -202,10 +139,11 @@ export function TerminalScreen() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: selectedCastId,
-          storeId: targetStoreId,
-          terminalId: targetTerminalId,
-          type
+          staffId: selectedCastId,
+          storeId: store?.id,
+          terminalId: null,
+          type,
+          isCompanion: companionChecked
         })
       });
       if (!res.ok) {
@@ -213,6 +151,7 @@ export function TerminalScreen() {
         throw new Error(body.error ?? "エラーが発生しました");
       }
       setStatusMessage("勤怠を登録しました");
+      setCompanionChecked(false);
     } catch (err) {
       setStatusMessage((err as Error).message);
     } finally {
@@ -221,10 +160,8 @@ export function TerminalScreen() {
   };
 
   const handleSale = async () => {
-    const targetStoreId = authorizedStoreId ?? selectedStoreId ?? fallbackStore.id;
-    const targetTerminalId = terminalId || "dev-terminal";
-    if (!pinValid || !selectedCastId) {
-      setStatusMessage("キャスト選択とPIN確認を行ってください");
+    if (!saleCastId) {
+      setStatusMessage("売上対象のキャストを選択してください");
       return;
     }
     const amount = Number(saleAmount);
@@ -239,12 +176,11 @@ export function TerminalScreen() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: selectedCastId,
-          storeId: targetStoreId,
-          terminalId: targetTerminalId,
-          tableNumber: saleTable,
-          category: saleCategory,
-          amount
+          staffId: saleCastId,
+          storeId: store?.id,
+          paymentMethod: salePayment,
+          amount,
+          terminalId: null
         })
       });
       if (!res.ok) {
@@ -252,7 +188,6 @@ export function TerminalScreen() {
         throw new Error(body.error ?? "エラーが発生しました");
       }
       setStatusMessage("売上を登録しました");
-      setSaleTable("");
       setSaleAmount("0");
     } catch (err) {
       setStatusMessage((err as Error).message);
@@ -261,18 +196,16 @@ export function TerminalScreen() {
     }
   };
 
-  const formattedDate = format(new Date(), "yyyy年MM月dd日 (EEE)", { locale: ja });
+  const renderedStoreName = store?.name ?? FALLBACK_STORE_NAME;
 
   return (
     <div className="space-y-8">
       <section className="rounded-3xl border border-slate-800 bg-black/80 p-6 shadow-lg">
         <div className="flex flex-col gap-2 text-center">
-          <p className="text-sm text-slate-300">{formattedDate}</p>
-          <h1 className="text-3xl font-semibold text-pink-300">
-            {store?.name ?? "店舗を選択してください"}
-          </h1>
-          <p className="text-sm text-slate-400">
-            営業時間: {store?.openingTime ?? "--:--"} - {store?.closingTime ?? "--:--"}
+          <h1 className="text-3xl font-semibold text-pink-300">{renderedStoreName}</h1>
+          <p className="text-sm text-slate-300">{currentTime}</p>
+          <p className="text-xs text-slate-500">
+            端末IDチェックは開発モードのためスキップされています
           </p>
         </div>
       </section>
@@ -280,84 +213,50 @@ export function TerminalScreen() {
       <section className="grid gap-6 md:grid-cols-2">
         <div className="space-y-4 rounded-2xl border border-slate-800 bg-black/70 p-6">
           <div className="space-y-2">
-            <Label>店舗選択</Label>
-            <Select value={selectedStoreId} onValueChange={setSelectedStoreId}>
-              <SelectTrigger>
-                <SelectValue placeholder="店舗を選択" />
-              </SelectTrigger>
-              <SelectContent>
-                {stores.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>
-                    {s.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-slate-500">開発モードでは全端末で利用できます。</p>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="terminalId">端末ID</Label>
-            <div className="flex gap-2">
-              <Input
-                id="terminalId"
-                value={terminalId}
-                onChange={(event) => setTerminalId(event.target.value.trim())}
-                placeholder="端末ごとの登録ID"
-                className="flex-1"
-              />
-              <Button
-                type="button"
-                onClick={handleAuthorizeTerminal}
-                disabled={isCheckingTerminal}
-                variant="secondary"
-              >
-                {isCheckingTerminal ? "確認中" : "認証"}
-              </Button>
-            </div>
-            <p className="text-xs text-slate-400">
-              現在は端末ID固定をスキップしています。
-            </p>
-            {terminalMessage ? (
-              <p className="text-xs text-pink-300">{terminalMessage}</p>
-            ) : null}
-          </div>
-
-          <div className="space-y-2">
             <Label>キャスト選択</Label>
-            <Select value={selectedCastId} onValueChange={setSelectedCastId}>
+            <Select
+              value={selectedCastId}
+              onValueChange={(value) => {
+                setSelectedCastId(value);
+              }}
+              disabled={isLoadingStore}
+            >
               <SelectTrigger>
-                <SelectValue placeholder="キャストを選択" />
+                <SelectValue placeholder={isLoadingStore ? "読込中..." : "キャストを選択"} />
               </SelectTrigger>
               <SelectContent>
-                {casts.map((cast) => (
-                  <SelectItem key={cast.id} value={cast.id}>
-                    {cast.displayName}
+                {casts.length === 0 ? (
+                  <SelectItem value="" disabled>
+                    キャストが登録されていません
                   </SelectItem>
-                ))}
+                ) : (
+                  casts.map((cast) => (
+                    <SelectItem key={cast.id} value={cast.id}>
+                      {cast.displayName}
+                    </SelectItem>
+                  ))
+                )}
               </SelectContent>
             </Select>
           </div>
 
-          <div className="space-y-2">
-            <Label>4桁PIN</Label>
-            <Input
-              value={pin}
-              onChange={(event) => setPin(event.target.value.replace(/\D/g, "").slice(0, 4))}
-              inputMode="numeric"
-              maxLength={4}
-              placeholder="****"
-              className="text-center text-2xl tracking-[0.4em] bg-slate-950"
+          <div className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3">
+            <input
+              id="companion"
+              type="checkbox"
+              checked={companionChecked}
+              onChange={(event) => setCompanionChecked(event.target.checked)}
+              className="h-4 w-4 rounded border border-slate-700 bg-black text-pink-400 focus-visible:outline-none"
             />
-            <p className="text-xs text-slate-400">
-              PINが正しい場合のみボタンが有効になります。
-            </p>
+            <Label htmlFor="companion" className="text-sm text-slate-200">
+              同伴出勤
+            </Label>
           </div>
 
           <div className="grid grid-cols-2 gap-3 text-lg font-semibold">
             <Button
               className="h-16 text-lg"
-              disabled={!pinValid || isSubmitting || isVerifying || !selectedCastId}
+              disabled={isSubmitting || !selectedCastId || !store?.id}
               onClick={() => handleAttendance("CLOCK_IN")}
             >
               出勤
@@ -365,7 +264,7 @@ export function TerminalScreen() {
             <Button
               className="h-16 text-lg"
               variant="secondary"
-              disabled={!pinValid || isSubmitting || isVerifying || !selectedCastId}
+              disabled={isSubmitting || !selectedCastId || !store?.id}
               onClick={() => handleAttendance("CLOCK_OUT")}
             >
               退勤
@@ -373,7 +272,7 @@ export function TerminalScreen() {
             <Button
               className="h-16 text-lg"
               variant="secondary"
-              disabled={!pinValid || isSubmitting || isVerifying || !selectedCastId}
+              disabled={isSubmitting || !selectedCastId || !store?.id}
               onClick={() => handleAttendance("BREAK_START")}
             >
               休憩開始
@@ -381,39 +280,92 @@ export function TerminalScreen() {
             <Button
               className="h-16 text-lg"
               variant="secondary"
-              disabled={!pinValid || isSubmitting || isVerifying || !selectedCastId}
+              disabled={isSubmitting || !selectedCastId || !store?.id}
               onClick={() => handleAttendance("BREAK_END")}
             >
               休憩終了
             </Button>
           </div>
+
+          <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-pink-200">現在出勤中</h3>
+              <p className="text-xs text-slate-500">{store?.name ?? FALLBACK_STORE_NAME}</p>
+            </div>
+            <div className="space-y-2">
+              {activeStaff.length === 0 ? (
+                <p className="text-sm text-slate-500">出勤中のキャストはいません。</p>
+              ) : (
+                activeStaff.map((member) => (
+                  <div
+                    key={member.id}
+                    className="flex items-center justify-between rounded-xl border border-slate-800 bg-black/60 px-3 py-2 text-sm text-slate-100"
+                  >
+                    <div className="flex flex-col">
+                      <span className="font-semibold">{member.displayName}</span>
+                      <span className="text-xs text-slate-400">
+                        {member.clockInAt
+                          ? `${format(new Date(member.clockInAt), "HH:mm")}〜`
+                          : "時間未取得"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {member.isCompanion ? (
+                        <span className="rounded-full bg-pink-900/60 px-2 py-1 text-[10px] text-pink-100">
+                          同伴
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="space-y-4 rounded-2xl border border-slate-800 bg-black/70 p-6">
           <h2 className="text-xl font-semibold text-pink-200">売上入力</h2>
-          <div className="space-y-2">
-            <Label htmlFor="table">卓番/伝票番号</Label>
-            <Input
-              id="table"
-              value={saleTable}
-              onChange={(event) => setSaleTable(event.target.value)}
-              placeholder="例: A-12"
-            />
-          </div>
+
           <div className="space-y-2">
             <Label>区分</Label>
-            <Select value={saleCategory} onValueChange={(value) => setSaleCategory(value as SaleCategory)}>
+            <Select
+              value={salePayment}
+              onValueChange={(value) => setSalePayment(value as PaymentMethod)}
+              disabled={isLoadingStore}
+            >
               <SelectTrigger>
-                <SelectValue />
+                <SelectValue placeholder="選択してください" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="SET">セット</SelectItem>
-                <SelectItem value="DRINK">ドリンク</SelectItem>
-                <SelectItem value="BOTTLE">ボトル</SelectItem>
-                <SelectItem value="OTHER">その他</SelectItem>
+                <SelectItem value="CASH">現金</SelectItem>
+                <SelectItem value="PAYPAY">PayPay</SelectItem>
+                <SelectItem value="CARD">クレジットカード</SelectItem>
               </SelectContent>
             </Select>
           </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="saleCast">キャスト選択</Label>
+            <Select value={saleCastId} onValueChange={setSaleCastId} disabled={isLoadingStore}>
+              <SelectTrigger>
+                <SelectValue placeholder={isLoadingStore ? "読込中..." : "キャストを選択"} />
+              </SelectTrigger>
+              <SelectContent>
+                {casts.length === 0 ? (
+                  <SelectItem value="" disabled>
+                    キャストが登録されていません
+                  </SelectItem>
+                ) : (
+                  casts.map((cast) => (
+                    <SelectItem key={cast.id} value={cast.id}>
+                      {cast.displayName}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+
           <div className="space-y-2">
             <Label htmlFor="amount">金額</Label>
             <Input
@@ -425,7 +377,7 @@ export function TerminalScreen() {
           </div>
           <Button
             className="h-14 w-full text-lg"
-            disabled={!pinValid || isSubmitting || isVerifying || !selectedCastId}
+            disabled={isSubmitting || !saleCastId || !store?.id}
             onClick={handleSale}
           >
             売上を登録
