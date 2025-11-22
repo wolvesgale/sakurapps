@@ -11,7 +11,7 @@ const links = [
   { href: "/stores", label: "店舗" },
   { href: "/staff", label: "スタッフ" },
   { href: "/reports", label: "レポート" },
-  { href: "/terminal-mgmt", label: "端末管理" }
+  { href: "/dashboard/terminal-mgmt", label: "端末管理" }
 ];
 
 export function AppHeader() {
@@ -32,8 +32,8 @@ export function AppHeader() {
                 if (link.href === "/stores" && !["OWNER", "ADMIN"].includes(role ?? "")) return false;
                 if (link.href === "/staff" && role === "DRIVER") return false;
                 if (link.href === "/reports" && role === "DRIVER") return false;
-                if (link.href === "/terminal-mgmt" && role === "DRIVER") return false;
-                if (link.href === "/terminal-mgmt" && role === "CAST") return false;
+                if (link.href === "/dashboard/terminal-mgmt" && role === "DRIVER") return false;
+                if (link.href === "/dashboard/terminal-mgmt" && role === "CAST") return false;
                 return true;
               })
               .map((link) => (
