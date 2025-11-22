@@ -1,6 +1,6 @@
 # Sakurapps 勤怠・売上管理システム v2
 
-Next.js 14 (App Router) + Prisma + NextAuth で構築した、ガールズバー/飲食店向けの勤怠・売上管理システムです。オーナー・管理者・ドライバーはメール/パスワードでログインし、キャストは店舗端末から名前 + PIN で打刻・売上入力のみを行います。
+Next.js 14 (App Router) + Prisma + NextAuth で構築した、ガールズバー/飲食店向けの勤怠・売上管理システムです。オーナー・管理者・ドライバーはユーザーID + パスワードでログインし、キャストは店舗端末からユーザーID + PIN で打刻・売上入力のみを行います。
 
 ## 技術スタック
 
@@ -27,6 +27,9 @@ Next.js 14 (App Router) + Prisma + NextAuth で構築した、ガールズバー
    - `DATABASE_URL`: PostgreSQL の接続文字列
    - `NEXTAUTH_SECRET`: `openssl rand -base64 32` などで生成したランダム文字列
    - `NEXTAUTH_URL`: 開発/本番環境のホスト (例: `http://localhost:3000`)
+   - `SEED_OWNER_USERNAME`: シード実行時に作成するオーナーのユーザーID
+   - `SEED_OWNER_PASSWORD`: シード実行時に作成するオーナーのパスワード
+   - `SEED_OWNER_DISPLAY_NAME`: シード実行時に作成するオーナーの表示名 (任意)
 
 3. Prisma クライアントを生成し、マイグレーションを実行します。
 
@@ -37,7 +40,15 @@ Next.js 14 (App Router) + Prisma + NextAuth で構築した、ガールズバー
 
    > PostgreSQL で `gen_random_uuid()` を利用するため、`pgcrypto` 拡張を有効にしておいてください。
 
-4. 開発サーバーを起動します。
+4. 必要に応じてオーナーアカウントをシードします。
+
+   ```bash
+   npm run seed
+   ```
+
+   `.env` に設定した `SEED_OWNER_USERNAME` と `SEED_OWNER_PASSWORD` を利用して OWNER ユーザーが1件作成されます（すでに存在する場合は再作成されません）。
+
+5. 開発サーバーを起動します。
 
    ```bash
    npm run dev
