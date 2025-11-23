@@ -38,8 +38,13 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
   const monthStart = startOfMonth(selectedDate);
   const monthEnd = endOfMonth(selectedDate);
 
+  const storeParam = searchParams?.storeId;
   const selectedStoreId =
-    session.user.role === "ADMIN" ? session.user.storeId ?? undefined : searchParams?.storeId;
+    session.user.role === "ADMIN"
+      ? session.user.storeId ?? undefined
+      : storeParam && storeParam !== "__all__"
+        ? storeParam
+        : undefined;
 
   const casts = await prisma.user.findMany({
     where: {
@@ -50,9 +55,9 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
     orderBy: { displayName: "asc" }
   });
 
-  const selectedCastId = searchParams?.castId && casts.some((c) => c.id === searchParams.castId)
-    ? searchParams.castId
-    : undefined;
+  const castParam = searchParams?.castId;
+  const selectedCastId =
+    castParam && castParam !== "__all__" && casts.some((c) => c.id === castParam) ? castParam : undefined;
 
   const [attendances, sales, monthlyAttendances] = await Promise.all([
     prisma.attendance.findMany({
@@ -111,12 +116,12 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
             </div>
             <div className="space-y-2">
               <Label>店舗</Label>
-              <Select name="storeId" defaultValue={selectedStoreId ?? ""}>
+              <Select name="storeId" defaultValue={selectedStoreId ?? "__all__"}>
                 <SelectTrigger>
                   <SelectValue placeholder="全店舗" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">全店舗</SelectItem>
+                  <SelectItem value="__all__">全店舗</SelectItem>
                   {stores
                     .filter((store) =>
                       session.user.role === "ADMIN"
@@ -133,12 +138,12 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
             </div>
             <div className="space-y-2">
               <Label>キャスト</Label>
-              <Select name="castId" defaultValue={selectedCastId ?? ""}>
+              <Select name="castId" defaultValue={selectedCastId ?? "__all__"}>
                 <SelectTrigger>
                   <SelectValue placeholder="全キャスト" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">全キャスト</SelectItem>
+                  <SelectItem value="__all__">全キャスト</SelectItem>
                   {casts.map((cast) => (
                     <SelectItem key={cast.id} value={cast.id}>
                       {cast.displayName}

@@ -27,7 +27,6 @@ async function createStaff(formData: FormData) {
   const email = formData.get("email");
   const password = formData.get("password");
   const role = formData.get("role");
-  const storeId = formData.get("storeId");
 
   if (!displayName || typeof displayName !== "string") {
     throw new Error("表示名を入力してください");
@@ -51,19 +50,7 @@ async function createStaff(formData: FormData) {
 
   const defaultStore = await getOrCreateDefaultStore();
 
-  const resolvedStoreId: string | null =
-    typeof storeId === "string" && storeId.length > 0
-      ? storeId
-      : session.user.storeId ?? defaultStore.id;
-
-  const requiresStoreAssociation = selectedRole !== "OWNER" && selectedRole !== "ADMIN";
-
-  if (requiresStoreAssociation && !resolvedStoreId) {
-    throw new Error("店舗を選択してください");
-  }
-
-  const normalizedEmail =
-    typeof email === "string" && email.length > 0 ? email.toLowerCase() : null;
+  const normalizedEmail = typeof email === "string" && email.length > 0 ? email.toLowerCase() : null;
 
   const rawPassword = typeof password === "string" ? password : "";
 
@@ -76,10 +63,10 @@ async function createStaff(formData: FormData) {
     username: normalizedUsername,
     role: selectedRole,
     isActive: true,
-    ...(resolvedStoreId && selectedRole !== "OWNER"
+    ...(selectedRole !== "OWNER" && selectedRole !== "ADMIN"
       ? {
           store: {
-            connect: { id: resolvedStoreId }
+            connect: { id: defaultStore.id }
           }
         }
       : {}),
@@ -103,9 +90,14 @@ async function createStaff(formData: FormData) {
     data.passwordHash = await hashPassword(rawPassword);
   }
 
-  await prisma.user.create({
-    data
-  });
+  try {
+    await prisma.user.create({
+      data
+    });
+  } catch (error) {
+    console.error("[staff:create]", error);
+    throw new Error("スタッフ作成に失敗しました。入力内容を確認してください。");
+  }
 
   revalidatePath("/dashboard/staff");
 }
@@ -118,17 +110,6 @@ export default async function StaffPage() {
   }
 
   const defaultStore = await getOrCreateDefaultStore();
-
-  const stores = await prisma.store.findMany({
-    orderBy: { name: "asc" }
-  });
-
-  const visibleStores =
-    session.user.role === "ADMIN" && session.user.storeId
-      ? stores.filter((store) => store.id === session.user.storeId)
-      : stores.length > 0
-        ? stores
-        : [defaultStore];
 
   const staff = await prisma.user.findMany({
     where: {
@@ -143,11 +124,16 @@ export default async function StaffPage() {
 
   return (
     <div className="space-y-8">
-      <h1 className="text-2xl font-semibold text-pink-300">スタッフ管理</h1>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="text-2xl font-semibold text-pink-300">スタッフ管理</h1>
+        <p className="text-xs text-slate-400">店舗は {defaultStore.name} 固定です。</p>
+      </div>
       <Card>
         <CardHeader>
           <CardTitle>スタッフ追加</CardTitle>
-          <CardDescription>キャストは端末で PIN なし打刻、勤怠確定はオーナー承認で行います。</CardDescription>
+          <CardDescription>
+            キャストは端末で PIN なし打刻、勤怠確定はオーナー承認で行います。店舗は Nest SAKURA 固定です。
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form action={createStaff} className="grid gap-4 sm:grid-cols-2">
@@ -182,7 +168,7 @@ export default async function StaffPage() {
               <Label>ロール</Label>
               <Select name="role" defaultValue="CAST">
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue placeholder="ロールを選択" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="CAST">キャスト</SelectItem>
@@ -190,13 +176,8 @@ export default async function StaffPage() {
                 </SelectContent>
               </Select>
             </div>
-            <input type="hidden" name="storeId" value={visibleStores[0]?.id ?? defaultStore.id} />
-            <div className="space-y-2">
-              <Label>所属店舗</Label>
-              <div className="rounded-md border border-slate-800 bg-slate-900/60 px-3 py-2 text-sm text-slate-200">
-                {visibleStores[0]?.name ?? defaultStore.name}
-              </div>
-              <p className="text-xs text-slate-500">Nest SAKURA 専用のため店舗選択は固定です。</p>
+            <div className="rounded-md border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-400 sm:col-span-2">
+              店舗選択は Nest SAKURA 固定です。マルチ店舗運用は現在無効化しています。
             </div>
             <Button type="submit" className="sm:col-span-2">
               スタッフを作成
