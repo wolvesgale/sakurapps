@@ -334,9 +334,7 @@ export function TerminalScreen() {
                     <div className="flex flex-col">
                       <span className="font-semibold">{member.displayName}</span>
                       <span className="text-xs text-slate-400">
-                        {member.clockInAt
-                          ? `${format(new Date(member.clockInAt), "HH:mm")}〜`
-                          : "時間未取得"}
+                        {member.clockInAt ? `${format(new Date(member.clockInAt), "HH:mm")}〜` : "時間未取得"}
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
