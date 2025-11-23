@@ -16,7 +16,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { getOrCreateDefaultStore } from "@/lib/store";
-import { calculateMonthlySummaryFromRecords, updateDayApproval } from "@/lib/attendance";
+import { getMonthlyAttendanceSummary, updateDayApproval } from "@/lib/attendance";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -294,7 +294,12 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
       approvalByDate[selectedDayKey] ??
       (selectedDayAttendances.length > 0 && selectedDayAttendances.every((attendance) => Boolean(attendance.approvedAt)));
 
-    const monthlySummary = calculateMonthlySummaryFromRecords(attendances);
+    const monthlySummary = await getMonthlyAttendanceSummary({
+      storeId: activeStoreId,
+      staffId: selectedStaffId,
+      year: monthStart.getFullYear(),
+      month: monthStart.getMonth() + 1
+    });
     const workingHoursLabel =
       staffSelectValue === "__all__"
         ? "勤務時間合計（全員）"
