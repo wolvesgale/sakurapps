@@ -1,10 +1,10 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { hash } from "bcryptjs";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { hashPassword, isStrongPassword } from "@/lib/auth";
+import { getOrCreateDefaultStore } from "@/lib/store";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,7 +28,6 @@ async function createStaff(formData: FormData) {
   const password = formData.get("password");
   const role = formData.get("role");
   const storeId = formData.get("storeId");
-  const pin = formData.get("pin");
 
   if (!displayName || typeof displayName !== "string") {
     throw new Error("表示名を入力してください");
@@ -50,10 +49,12 @@ async function createStaff(formData: FormData) {
 
   const normalizedUsername = username.trim();
 
+  const defaultStore = await getOrCreateDefaultStore();
+
   const resolvedStoreId: string | null =
     typeof storeId === "string" && storeId.length > 0
       ? storeId
-      : session.user.storeId ?? null;
+      : session.user.storeId ?? defaultStore.id;
 
   const requiresStoreAssociation = selectedRole !== "OWNER" && selectedRole !== "ADMIN";
 
@@ -86,10 +87,12 @@ async function createStaff(formData: FormData) {
   };
 
   if (selectedRole === "CAST") {
-    if (!pin || typeof pin !== "string" || pin.length < 4) {
-      throw new Error("キャスト用PINを4桁で入力してください");
+    if (rawPassword.length > 0) {
+      if (!isStrongPassword(rawPassword)) {
+        throw new Error("8文字以上・大文字・小文字・数字を含むパスワードを設定してください");
+      }
+      data.passwordHash = await hashPassword(rawPassword);
     }
-    data.castPinHash = await hash(pin, 10);
   } else {
     if (rawPassword.length === 0) {
       throw new Error("パスワードを入力してください");
@@ -114,6 +117,8 @@ export default async function StaffPage() {
     redirect("/dashboard");
   }
 
+  const defaultStore = await getOrCreateDefaultStore();
+
   const stores = await prisma.store.findMany({
     orderBy: { name: "asc" }
   });
@@ -121,7 +126,9 @@ export default async function StaffPage() {
   const visibleStores =
     session.user.role === "ADMIN" && session.user.storeId
       ? stores.filter((store) => store.id === session.user.storeId)
-      : stores;
+      : stores.length > 0
+        ? stores
+        : [defaultStore];
 
   const staff = await prisma.user.findMany({
     where: {
@@ -140,7 +147,7 @@ export default async function StaffPage() {
       <Card>
         <CardHeader>
           <CardTitle>スタッフ追加</CardTitle>
-          <CardDescription>キャストはPINで店舗端末から打刻します。</CardDescription>
+          <CardDescription>キャストは端末で PIN なし打刻、勤怠確定はオーナー承認で行います。</CardDescription>
         </CardHeader>
         <CardContent>
           <form action={createStaff} className="grid gap-4 sm:grid-cols-2">
@@ -183,29 +190,13 @@ export default async function StaffPage() {
                 </SelectContent>
               </Select>
             </div>
+            <input type="hidden" name="storeId" value={visibleStores[0]?.id ?? defaultStore.id} />
             <div className="space-y-2">
               <Label>所属店舗</Label>
-              <Select
-                name="storeId"
-                defaultValue={
-                  session.user.storeId ?? (visibleStores.length === 1 ? visibleStores[0].id : undefined)
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="店舗を選択" />
-                </SelectTrigger>
-                <SelectContent>
-                  {visibleStores.map((store) => (
-                    <SelectItem key={store.id} value={store.id}>
-                      {store.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="pin">PIN (キャストのみ必須)</Label>
-              <Input id="pin" name="pin" placeholder="1234" maxLength={8} />
+              <div className="rounded-md border border-slate-800 bg-slate-900/60 px-3 py-2 text-sm text-slate-200">
+                {visibleStores[0]?.name ?? defaultStore.name}
+              </div>
+              <p className="text-xs text-slate-500">Nest SAKURA 専用のため店舗選択は固定です。</p>
             </div>
             <Button type="submit" className="sm:col-span-2">
               スタッフを作成

@@ -8,7 +8,6 @@ import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/dashboard", label: "ダッシュボード" },
-  { href: "/dashboard/stores", label: "店舗" },
   { href: "/dashboard/staff", label: "スタッフ" },
   { href: "/dashboard/reports", label: "レポート" },
   { href: "/dashboard/terminal-mgmt", label: "端末管理" }
