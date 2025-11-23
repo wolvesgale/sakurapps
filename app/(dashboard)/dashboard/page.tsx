@@ -32,7 +32,7 @@ async function createRide(formData: FormData) {
     data: {
       note,
       driverId: session.user.id,
-      storeId: typeof storeId === "string" && storeId.length > 0 ? storeId : null
+      storeId: typeof storeId === "string" && storeId !== "__none__" ? storeId : null
     }
   });
 
@@ -260,22 +260,22 @@ export default async function DashboardPage() {
                 <Label htmlFor="note">内容</Label>
                 <Input id="note" name="note" required placeholder="お客様送迎メモ" />
               </div>
-              <div className="space-y-2 sm:col-span-2">
-                <Label>店舗 (任意)</Label>
-                <Select name="storeId" defaultValue="">
-                  <SelectTrigger>
-                    <SelectValue placeholder="店舗を選択" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="">未選択</SelectItem>
-                    {data.stores.map((store) => (
-                      <SelectItem key={store.id} value={store.id}>
-                        {store.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label>店舗 (任意)</Label>
+              <Select name="storeId" defaultValue="__none__">
+                <SelectTrigger>
+                  <SelectValue placeholder="店舗を選択" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">未選択</SelectItem>
+                  {data.stores.map((store) => (
+                    <SelectItem key={store.id} value={store.id}>
+                      {store.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
               <Button type="submit" className="sm:col-span-2">
                 送迎を記録
               </Button>
