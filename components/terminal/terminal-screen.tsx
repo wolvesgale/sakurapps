@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import Link from "next/link";
@@ -218,7 +218,7 @@ export function TerminalScreen() {
   );
 
   // keep a stable reference for Select options so Radix doesn't re-render unexpectedly
-  const selectableCasts = useMemo(() => casts, [casts]);
+  const selectableCasts = React.useMemo(() => casts, [casts]);
 
   return (
     <div className="space-y-8">
