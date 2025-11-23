@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { verifyTerminalAccess } from "@/lib/terminal";
+import { getOrCreateDefaultStore } from "@/lib/store";
 import { addDays, startOfDay } from "date-fns";
 
 const allowedTypes = ["CLOCK_IN", "CLOCK_OUT", "BREAK_START", "BREAK_END"] as const;
@@ -11,47 +12,52 @@ type AttendanceType = (typeof allowedTypes)[number];
 
 export async function POST(request: Request) {
   try {
-    const { userId, storeId, terminalId, type } = (await request.json()) as {
-      userId?: string;
-      storeId?: string;
-      terminalId?: string;
-      type?: AttendanceType;
-    };
+    const { staffId, storeId, terminalId, type, action, isCompanion } =
+      (await request.json()) as {
+        staffId?: string;
+        storeId?: string;
+        terminalId?: string;
+        type?: AttendanceType;
+        action?: AttendanceType;
+        isCompanion?: boolean;
+      };
 
-    if (!userId || !type || !allowedTypes.includes(type) || !storeId || !terminalId) {
+    const normalizedType = (action ?? type)
+      ? (action ?? type)?.toString().replace(/-/g, "_").toUpperCase()
+      : undefined;
+
+    const resolvedType = allowedTypes.find((candidate) => candidate === normalizedType);
+
+    if (!staffId || !resolvedType || !allowedTypes.includes(resolvedType)) {
       return NextResponse.json({ error: "Invalid request" }, { status: 400 });
     }
 
-    const terminal = await verifyTerminalAccess(storeId, terminalId);
+    const defaultStore = await getOrCreateDefaultStore();
+    const targetStoreId = storeId ?? defaultStore.id;
+
+    const terminal = await verifyTerminalAccess(targetStoreId, terminalId);
 
     if (!terminal) {
       return NextResponse.json({ error: "Unauthorized terminal" }, { status: 403 });
     }
 
-    const cast = await prisma.user.findFirst({
+    const staff = await prisma.user.findFirst({
       where: {
-        id: userId,
-        role: "CAST",
-        isActive: true,
-        ...(storeId ? { storeId } : {})
+        id: staffId,
+        role: { in: ["CAST", "DRIVER"] },
+        isActive: true
       }
     });
 
-    if (!cast) {
-      return NextResponse.json({ error: "Cast not found" }, { status: 404 });
-    }
-
-    if (storeId && cast.storeId && cast.storeId !== storeId) {
-      return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
-    }
-
-    const targetStoreId = storeId ?? cast.storeId;
-
-    if (!targetStoreId) {
-      return NextResponse.json({ error: "Store not found" }, { status: 400 });
+    if (!staff) {
+      return NextResponse.json({ error: "Staff not found" }, { status: 404 });
     }
 
     if (terminal.storeId !== targetStoreId) {
+      return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
+    }
+
+    if (staff.storeId && staff.storeId !== targetStoreId) {
       return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
     }
 
@@ -75,10 +81,11 @@ export async function POST(request: Request) {
 
     const attendance = await prisma.attendance.create({
       data: {
-        userId: cast.id,
+        userId: staff.id,
         storeId: targetStoreId,
-        type,
-        timestamp: new Date()
+        type: resolvedType,
+        timestamp: new Date(),
+        isCompanion: resolvedType === "CLOCK_IN" ? Boolean(isCompanion) : false
       }
     });
 
