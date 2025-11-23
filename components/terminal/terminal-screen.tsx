@@ -217,6 +217,7 @@ export function TerminalScreen() {
     </div>
   );
 
+  // keep a stable reference for Select options so Radix doesn't re-render unexpectedly
   const selectableCasts = useMemo(() => casts, [casts]);
 
   return (
@@ -226,13 +227,6 @@ export function TerminalScreen() {
           <h1 className="text-3xl font-semibold text-pink-300">{renderedStoreName}</h1>
           <p className="text-sm text-slate-300">{currentTime}</p>
           <p className="text-xs text-slate-500">端末IDチェックは開発モードのためスキップされています</p>
-        </div>
-        <div className="mt-4 flex justify-center">
-          <Link href="/">
-            <Button variant="secondary" size="sm">
-              TOPに戻る
-            </Button>
-          </Link>
         </div>
         <div className="mt-4 flex justify-center">
           <Link href="/">
