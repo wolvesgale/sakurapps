@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -211,6 +212,13 @@ export function TerminalScreen() {
           <p className="text-xs text-slate-500">
             端末IDチェックは開発モードのためスキップされています
           </p>
+        </div>
+        <div className="mt-4 flex justify-center">
+          <Link href="/">
+            <Button variant="secondary" size="sm">
+              TOPに戻る
+            </Button>
+          </Link>
         </div>
       </section>
 

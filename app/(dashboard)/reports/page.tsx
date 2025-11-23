@@ -29,81 +29,84 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
   }
 
   const defaultStore = await getOrCreateDefaultStore();
-  const stores = await prisma.store.findMany({ orderBy: { name: "asc" } });
+  const rawDate = searchParams?.date;
+  const parsedDate = rawDate && !Number.isNaN(Date.parse(rawDate)) ? new Date(rawDate) : new Date();
 
-  const dateParam = searchParams?.date ?? formatISO(new Date(), { representation: "date" });
-  const selectedDate = new Date(dateParam);
-  const start = startOfDay(selectedDate);
-  const end = addDays(start, 1);
-  const monthStart = startOfMonth(selectedDate);
-  const monthEnd = endOfMonth(selectedDate);
+  try {
+    const stores = await prisma.store.findMany({ orderBy: { name: "asc" } });
 
-  const storeParam = searchParams?.storeId;
-  const selectedStoreId =
-    session.user.role === "ADMIN"
-      ? session.user.storeId ?? undefined
-      : storeParam && storeParam !== "__all__"
-        ? storeParam
-        : undefined;
+    const selectedDate = startOfDay(parsedDate);
+    const start = selectedDate;
+    const end = addDays(start, 1);
+    const monthStart = startOfMonth(selectedDate);
+    const monthEnd = endOfMonth(selectedDate);
 
-  const casts = await prisma.user.findMany({
-    where: {
-      role: "CAST",
-      isActive: true,
-      storeId: selectedStoreId ?? defaultStore.id
-    },
-    orderBy: { displayName: "asc" }
-  });
+    const storeParam = searchParams?.storeId;
+    const selectedStoreId =
+      session.user.role === "ADMIN"
+        ? session.user.storeId ?? undefined
+        : storeParam && storeParam !== "__all__"
+          ? storeParam
+          : undefined;
 
-  const castParam = searchParams?.castId;
-  const selectedCastId =
-    castParam && castParam !== "__all__" && casts.some((c) => c.id === castParam) ? castParam : undefined;
-
-  const [attendances, sales, monthlyAttendances] = await Promise.all([
-    prisma.attendance.findMany({
+    const casts = await prisma.user.findMany({
       where: {
-        timestamp: { gte: start, lt: end },
-        storeId: selectedStoreId ?? defaultStore.id,
-        ...(selectedCastId ? { userId: selectedCastId } : {})
-      },
-      include: { user: true, store: true },
-      orderBy: { timestamp: "desc" }
-    }),
-    prisma.sale.findMany({
-      where: {
-        createdAt: { gte: start, lt: end },
-        ...(selectedStoreId ? { storeId: selectedStoreId } : {}),
-        ...(selectedCastId ? { staffId: selectedCastId } : {}),
+        role: "CAST",
+        isActive: true,
         storeId: selectedStoreId ?? defaultStore.id
       },
-      include: { staff: true, store: true },
-      orderBy: { createdAt: "desc" }
-    }),
-    prisma.attendance.findMany({
-      where: {
-        timestamp: { gte: monthStart, lt: addDays(monthEnd, 1) },
-        storeId: selectedStoreId ?? defaultStore.id,
-        ...(selectedCastId ? { userId: selectedCastId } : {})
+      orderBy: { displayName: "asc" }
+    });
+
+    const castParam = searchParams?.castId;
+    const selectedCastId =
+      castParam && castParam !== "__all__" && casts.some((c) => c.id === castParam) ? castParam : undefined;
+
+    const [attendances, sales, monthlyAttendances] = await Promise.all([
+      prisma.attendance.findMany({
+        where: {
+          timestamp: { gte: start, lt: end },
+          storeId: selectedStoreId ?? defaultStore.id,
+          ...(selectedCastId ? { userId: selectedCastId } : {})
+        },
+        include: { user: true, store: true },
+        orderBy: { timestamp: "desc" }
+      }),
+      prisma.sale.findMany({
+        where: {
+          createdAt: { gte: start, lt: end },
+          ...(selectedStoreId ? { storeId: selectedStoreId } : {}),
+          ...(selectedCastId ? { staffId: selectedCastId } : {}),
+          storeId: selectedStoreId ?? defaultStore.id
+        },
+        include: { staff: true, store: true },
+        orderBy: { createdAt: "desc" }
+      }),
+      prisma.attendance.findMany({
+        where: {
+          timestamp: { gte: monthStart, lt: addDays(monthEnd, 1) },
+          storeId: selectedStoreId ?? defaultStore.id,
+          ...(selectedCastId ? { userId: selectedCastId } : {})
+        },
+        include: { user: true, store: true },
+        orderBy: { timestamp: "asc" }
+      })
+    ]);
+
+    const salesTotal = sales.reduce((sum, sale) => sum + sale.amount, 0);
+    const calendarDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
+    const attendanceByDate = monthlyAttendances.reduce<Record<string, typeof monthlyAttendances[number][]>>(
+      (acc, record) => {
+        const key = format(record.timestamp, "yyyy-MM-dd");
+        acc[key] = acc[key] ? [...acc[key], record] : [record];
+        return acc;
       },
-      include: { user: true, store: true },
-      orderBy: { timestamp: "asc" }
-    })
-  ]);
+      {}
+    );
 
-  const salesTotal = sales.reduce((sum, sale) => sum + sale.amount, 0);
-  const calendarDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
-  const attendanceByDate = monthlyAttendances.reduce<Record<string, typeof monthlyAttendances[number][]>>(
-    (acc, record) => {
-      const key = format(record.timestamp, "yyyy-MM-dd");
-      acc[key] = acc[key] ? [...acc[key], record] : [record];
-      return acc;
-    },
-    {}
-  );
-
-  return (
-    <div className="space-y-8">
-      <h1 className="text-2xl font-semibold text-pink-300">レポート</h1>
+    return (
+      <div className="space-y-8">
+        <h1 className="text-2xl font-semibold text-pink-300">レポート</h1>
       <Card>
         <CardHeader>
           <CardTitle>フィルター</CardTitle>
@@ -247,6 +250,14 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
           </div>
         </CardContent>
       </Card>
-    </div>
-  );
+      </div>
+    );
+  } catch (error) {
+    console.error("[reports-page] render", error);
+    return (
+      <div className="rounded-lg border border-red-900/40 bg-red-950/30 p-6 text-sm text-red-100">
+        レポートデータの読み込みに失敗しました。時間をおいて再度お試しください。
+      </div>
+    );
+  }
 }

@@ -43,15 +43,20 @@ async function registerTerminal(formData: FormData) {
     throw new Error("店舗を選択してください");
   }
 
-  await prisma.terminal.create({
-    data: {
-      deviceId: normalizedDeviceId,
-      label: typeof label === "string" && label.length > 0 ? label : null,
-      store: {
-        connect: { id: targetStoreId }
+  try {
+    await prisma.terminal.create({
+      data: {
+        deviceId: normalizedDeviceId,
+        label: typeof label === "string" && label.length > 0 ? label : null,
+        store: {
+          connect: { id: targetStoreId }
+        }
       }
-    }
-  });
+    });
+  } catch (error) {
+    console.error("[terminal-mgmt:create]", error);
+    throw new Error("端末登録に失敗しました。入力内容を確認してください。");
+  }
 
   revalidatePath("/dashboard/terminal-mgmt");
 }

@@ -58,18 +58,21 @@ async function createStaff(formData: FormData) {
     throw new Error("メールアドレスを入力してください");
   }
 
-  const data: Prisma.UserCreateInput = {
-    displayName,
-    username: normalizedUsername,
-    role: selectedRole,
-    isActive: true,
-    ...(selectedRole !== "OWNER" && selectedRole !== "ADMIN"
+  const storeRelation =
+    defaultStore.id && !defaultStore.id.startsWith("dev-")
       ? {
           store: {
             connect: { id: defaultStore.id }
           }
         }
-      : {}),
+      : {};
+
+  const data: Prisma.UserCreateInput = {
+    displayName,
+    username: normalizedUsername,
+    role: selectedRole,
+    isActive: true,
+    ...(selectedRole !== "OWNER" && selectedRole !== "ADMIN" ? storeRelation : {}),
     ...(normalizedEmail ? { email: normalizedEmail } : {})
   };
 

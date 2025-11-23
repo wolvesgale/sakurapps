@@ -129,11 +129,12 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
   const defaultStore = await getOrCreateDefaultStore();
   const activeStoreId = session.user.storeId ?? defaultStore.id;
 
-  const monthParam = searchParams?.month ?? format(new Date(), "yyyy-MM");
-  const monthStart = startOfMonth(new Date(`${monthParam}-01`));
-  const monthEnd = endOfMonth(monthStart);
-
   try {
+    const monthParam = searchParams?.month;
+    const parsedMonth =
+      monthParam && /^\d{4}-\d{2}$/.test(monthParam) ? new Date(`${monthParam}-01`) : new Date();
+    const monthStart = startOfMonth(parsedMonth);
+    const monthEnd = endOfMonth(monthStart);
     const staffList = await prisma.user.findMany({
       where: { role: { in: ["CAST", "DRIVER"] }, isActive: true, storeId: activeStoreId },
       orderBy: { displayName: "asc" }

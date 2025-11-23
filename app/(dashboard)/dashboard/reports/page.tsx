@@ -216,13 +216,15 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
   const defaultStore = await getOrCreateDefaultStore();
   const activeStoreId = session.user.storeId ?? defaultStore.id;
 
-  const dateParam = searchParams?.date ?? formatISO(new Date(), { representation: "date" });
-  const selectedDate = startOfDay(new Date(dateParam));
-  const dayEnd = addDays(selectedDate, 1);
-  const monthStart = startOfMonth(selectedDate);
-  const monthEnd = endOfMonth(selectedDate);
+  const rawDate = searchParams?.date;
+  const parsedDate = rawDate && !Number.isNaN(Date.parse(rawDate)) ? new Date(rawDate) : new Date();
 
   try {
+    const selectedDate = startOfDay(parsedDate);
+    const dayEnd = addDays(selectedDate, 1);
+    const monthStart = startOfMonth(selectedDate);
+    const monthEnd = endOfMonth(selectedDate);
+
     const casts = await prisma.user.findMany({
       where: {
         role: "CAST",
@@ -299,9 +301,9 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
 
     const staffSelectValue = selectedCastId ?? "__all__";
 
-  return (
-    <div className="space-y-8">
-      <h1 className="text-2xl font-semibold text-pink-300">レポート / 勤怠承認</h1>
+    return (
+      <div className="space-y-8">
+        <h1 className="text-2xl font-semibold text-pink-300">レポート / 勤怠承認</h1>
       <Card>
         <CardHeader>
           <CardTitle>フィルター</CardTitle>
@@ -511,8 +513,8 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
           </CardContent>
         </Card>
       ) : null}
-    </div>
-  );
+      </div>
+    );
   } catch (error) {
     console.error("[reports] render", error);
     return (
