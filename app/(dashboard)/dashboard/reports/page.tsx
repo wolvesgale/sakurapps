@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatCurrency } from "@/lib/utils";
+import { SalesBreakdown } from "@/components/reports/sales-breakdown";
 
 export const dynamic = "force-dynamic";
 
@@ -178,17 +179,10 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
                       <td className="px-2 py-3 font-semibold">{formatCurrency(daily?.total ?? 0)}</td>
                       <td className="px-2 py-3">
                         {daily ? (
-                          <details className="space-y-1 rounded-md border border-slate-800 bg-slate-900/60 p-3">
-                            <summary className="cursor-pointer text-xs text-slate-400">内訳を見る</summary>
-                            <ul className="space-y-1 text-xs">
-                              {Object.entries(daily.breakdown).map(([staffId, info]) => (
-                                <li key={staffId} className="flex items-center justify-between">
-                                  <span>{info.name}</span>
-                                  <span className="font-semibold text-pink-200">{formatCurrency(info.total)}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          </details>
+                          <SalesBreakdown
+                            dateKey={key}
+                            staffId={staffSelectValue === "__all__" ? undefined : staffSelectValue}
+                          />
                         ) : (
                           <span className="text-xs text-slate-500">売上なし</span>
                         )}
