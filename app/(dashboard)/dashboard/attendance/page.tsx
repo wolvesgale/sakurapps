@@ -12,7 +12,7 @@ import {
   startOfMonth
 } from "date-fns";
 import { ja } from "date-fns/locale";
-import type { Prisma } from "@prisma/client";
+import type { PaymentMethod, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { getOrCreateDefaultStore } from "@/lib/store";
@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SalesDetails, type AdminSaleItem } from "@/components/attendance/sales-details";
 import { formatCurrency } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -275,6 +276,24 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
         : startOfDay(monthStart);
     const selectedDayKey = format(selectedDay, "yyyy-MM-dd");
     const selectedDayAttendances = attendanceByDate[selectedDayKey] ?? [];
+    const selectedDaySales = await prisma.sale.findMany({
+      where: {
+        storeId: activeStoreId,
+        createdAt: { gte: startOfDay(selectedDay), lt: addDays(startOfDay(selectedDay), 1) },
+        ...(selectedStaffId ? { staffId: selectedStaffId } : {})
+      },
+      include: { staff: true },
+      orderBy: { createdAt: "asc" }
+    });
+    const selectedDaySalesTotal = selectedDaySales.reduce((sum, sale) => sum + sale.amount, 0);
+    const daySalesForUi: AdminSaleItem[] = selectedDaySales.map((sale) => ({
+      id: sale.id,
+      staffId: sale.staffId,
+      staffName: sale.staff?.displayName ?? "スタッフ不明",
+      paymentMethod: sale.paymentMethod as PaymentMethod,
+      amount: sale.amount,
+      createdAt: sale.createdAt.toISOString()
+    }));
 
     const groupedByStaff = selectedDayAttendances.reduce<
       Record<string, { staffName: string; records: AttendanceRecord[]; isApproved: boolean }>
@@ -541,6 +560,23 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                 })}
               </ul>
             )}
+
+            <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm text-slate-300">売上合計</p>
+                  <p className="text-2xl font-semibold text-pink-200">{formatCurrency(selectedDaySalesTotal)}</p>
+                </div>
+                <p className="text-xs text-slate-500">{selectedDaySales.length} 件</p>
+              </div>
+
+              <details className="rounded-md border border-slate-800/70 bg-black/40 p-3">
+                <summary className="cursor-pointer text-xs text-slate-400">内訳を見る</summary>
+                <div className="mt-3">
+                  <SalesDetails dateKey={selectedDayKey} sales={daySalesForUi} />
+                </div>
+              </details>
+            </div>
           </CardContent>
         </Card>
       </div>
