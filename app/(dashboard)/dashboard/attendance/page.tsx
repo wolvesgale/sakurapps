@@ -1,12 +1,21 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { addDays, eachDayOfInterval, endOfMonth, format, isValid, startOfDay, startOfMonth } from "date-fns";
+import {
+  addDays,
+  eachDayOfInterval,
+  endOfMonth,
+  format,
+  isValid,
+  startOfDay,
+  startOfMonth
+} from "date-fns";
 import { ja } from "date-fns/locale";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { getOrCreateDefaultStore } from "@/lib/store";
+import { calculateMonthlySummaryFromRecords, updateDayApproval } from "@/lib/attendance";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,83 +34,13 @@ const attendanceLabels: Record<string, string> = {
 
 type AttendanceRecord = Prisma.AttendanceGetPayload<{ include: { user: true; approvedBy: true } }>;
 
-function calculateRoundedHours(records: AttendanceRecord[]) {
-  // 勤務時間の集計は 15 分単位で切り上げる
-  const grouped = new Map<string, AttendanceRecord[]>();
-
-  records.forEach((record) => {
-    const list = grouped.get(record.userId) ?? [];
-    list.push(record);
-    grouped.set(record.userId, list);
-  });
-
-  let totalMinutes = 0;
-
-  grouped.forEach((userRecords) => {
-    const sorted = [...userRecords].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-    let currentStart: Date | null = null;
-
-    sorted.forEach((record) => {
-      if (record.type === "CLOCK_IN") {
-        currentStart = record.timestamp;
-      } else if (record.type === "CLOCK_OUT" && currentStart) {
-        const minutes = (record.timestamp.getTime() - currentStart.getTime()) / (1000 * 60);
-        if (minutes > 0) {
-          // 15 分単位で切り上げ
-          const rounded = Math.ceil(minutes / 15) * 15;
-          totalMinutes += rounded;
-        }
-        currentStart = null;
-      }
-    });
-  });
-
-  return totalMinutes / 60;
-}
-
-async function approveAttendance(formData: FormData) {
-  "use server";
-  const session = await getCurrentSession();
-
-  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) {
-    throw new Error("Unauthorized");
-  }
-
-  const attendanceId = formData.get("attendanceId");
-
-  if (!attendanceId || typeof attendanceId !== "string") {
-    throw new Error("勤怠IDが不明です");
-  }
-
-  await prisma.attendance.update({
-    where: { id: attendanceId },
-    data: { approvedAt: new Date(), approvedById: session.user.id }
-  });
-
-  revalidatePath("/dashboard/attendance");
-}
-
-async function unapproveAttendance(formData: FormData) {
-  "use server";
-  const session = await getCurrentSession();
-
-  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) {
-    throw new Error("Unauthorized");
-  }
-
-  const attendanceId = formData.get("attendanceId");
-
-  if (!attendanceId || typeof attendanceId !== "string") {
-    throw new Error("勤怠IDが不明です");
-  }
-
-  await prisma.attendance.update({
-    where: { id: attendanceId },
-    data: { approvedAt: null, approvedById: null }
-  });
-
-  revalidatePath("/dashboard/attendance");
-}
+type AttendancePageProps = {
+  searchParams?: {
+    month?: string;
+    staffId?: string;
+    day?: string;
+  };
+};
 
 async function deleteAttendance(formData: FormData) {
   "use server";
@@ -150,13 +89,53 @@ async function updateAttendance(formData: FormData) {
   revalidatePath("/dashboard/attendance");
 }
 
-type AttendancePageProps = {
-  searchParams?: {
-    month?: string;
-    staffId?: string;
-    day?: string;
-  };
-};
+async function approveDay(formData: FormData) {
+  "use server";
+  const session = await getCurrentSession();
+
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) {
+    throw new Error("Unauthorized");
+  }
+
+  const dateValue = formData.get("date");
+  if (!dateValue || typeof dateValue !== "string") {
+    throw new Error("日付が不明です");
+  }
+
+  const defaultStore = await getOrCreateDefaultStore();
+  await updateDayApproval({
+    storeId: session.user.storeId ?? defaultStore.id,
+    date: new Date(dateValue),
+    approved: true,
+    approverId: session.user.id
+  });
+
+  revalidatePath("/dashboard/attendance");
+}
+
+async function unapproveDay(formData: FormData) {
+  "use server";
+  const session = await getCurrentSession();
+
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) {
+    throw new Error("Unauthorized");
+  }
+
+  const dateValue = formData.get("date");
+  if (!dateValue || typeof dateValue !== "string") {
+    throw new Error("日付が不明です");
+  }
+
+  const defaultStore = await getOrCreateDefaultStore();
+  await updateDayApproval({
+    storeId: session.user.storeId ?? defaultStore.id,
+    date: new Date(dateValue),
+    approved: false,
+    approverId: session.user.id
+  });
+
+  revalidatePath("/dashboard/attendance");
+}
 
 export default async function AttendancePage({ searchParams }: AttendancePageProps) {
   const session = await getCurrentSession();
@@ -234,9 +213,12 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
         : startOfDay(monthStart);
     const selectedDayKey = format(selectedDay, "yyyy-MM-dd");
     const selectedDayAttendances = attendanceByDate[selectedDayKey] ?? [];
-    const selectedDayApproved = approvalByDate[selectedDayKey] ?? false;
 
-    const workingHoursTotal = calculateRoundedHours(attendances);
+    const selectedDayApproved =
+      approvalByDate[selectedDayKey] ??
+      (selectedDayAttendances.length > 0 && selectedDayAttendances.every((attendance) => Boolean(attendance.approvedAt)));
+
+    const monthlySummary = calculateMonthlySummaryFromRecords(attendances);
     const workingHoursLabel =
       staffSelectValue === "__all__"
         ? "勤務時間合計（全員）"
@@ -303,7 +285,9 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
             <CardHeader>
               <CardTitle>{workingHoursLabel}</CardTitle>
             </CardHeader>
-            <CardContent className="text-3xl font-bold text-pink-300">{workingHoursTotal.toFixed(1)} 時間</CardContent>
+            <CardContent className="text-3xl font-bold text-pink-300">
+              {monthlySummary.roundedHours} 時間 {monthlySummary.roundedRemainderMinutes} 分
+            </CardContent>
           </Card>
         </div>
 
@@ -358,11 +342,30 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>{format(selectedDay, "yyyy-MM-dd (E)", { locale: ja })} の勤怠詳細</CardTitle>
-            <CardDescription>
-              {selectedDayApproved ? "この日は承認済みです" : "未承認です。必要に応じて承認してください。"}
-            </CardDescription>
+          <CardHeader className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <CardTitle>{format(selectedDay, "yyyy-MM-dd (E)", { locale: ja })} の勤怠詳細</CardTitle>
+              <CardDescription>
+                {selectedDayApproved ? "承認済みです" : "未承認です。必要に応じて承認してください。"}
+              </CardDescription>
+            </div>
+            <div className="flex gap-2">
+              {selectedDayApproved ? (
+                <form action={unapproveDay}>
+                  <input type="hidden" name="date" value={selectedDay.toISOString()} />
+                  <Button type="submit" variant="secondary" size="sm">
+                    承認取消
+                  </Button>
+                </form>
+              ) : (
+                <form action={approveDay}>
+                  <input type="hidden" name="date" value={selectedDay.toISOString()} />
+                  <Button type="submit" size="sm">
+                    承認
+                  </Button>
+                </form>
+              )}
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             {selectedDayAttendances.length === 0 ? (
@@ -386,18 +389,6 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                         </p>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
-                        <form action={approveAttendance}>
-                          <input type="hidden" name="attendanceId" value={attendance.id} />
-                          <Button type="submit" size="sm" disabled={Boolean(attendance.approvedAt)}>
-                            承認
-                          </Button>
-                        </form>
-                        <form action={unapproveAttendance}>
-                          <input type="hidden" name="attendanceId" value={attendance.id} />
-                          <Button type="submit" size="sm" variant="secondary">
-                            取消
-                          </Button>
-                        </form>
                         <form action={deleteAttendance}>
                           <input type="hidden" name="attendanceId" value={attendance.id} />
                           <Button type="submit" size="sm" variant="destructive">
