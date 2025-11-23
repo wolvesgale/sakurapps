@@ -1,7 +1,9 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
+import { getOrCreateDefaultStore } from "@/lib/store";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,12 +30,14 @@ async function registerTerminal(formData: FormData) {
 
   const normalizedDeviceId = deviceId.trim();
 
+  const defaultStore = await getOrCreateDefaultStore();
+
   const targetStoreId =
     session.user.role === "ADMIN"
-      ? session.user.storeId
+      ? session.user.storeId ?? defaultStore.id
       : typeof storeId === "string" && storeId.length > 0
         ? storeId
-        : null;
+        : defaultStore.id;
 
   if (!targetStoreId) {
     throw new Error("店舗を選択してください");
@@ -59,22 +63,40 @@ export default async function TerminalManagementPage() {
     redirect("/dashboard");
   }
 
-  const stores = await prisma.store.findMany({
-    where:
-      session.user.role === "ADMIN" && session.user.storeId
-        ? { id: session.user.storeId }
-        : undefined,
-    orderBy: { name: "asc" }
-  });
+  const defaultStore = await getOrCreateDefaultStore();
 
-  const terminals = await prisma.terminal.findMany({
-    where:
-      session.user.role === "ADMIN" && session.user.storeId
-        ? { storeId: session.user.storeId }
-        : undefined,
-    include: { store: true },
-    orderBy: { createdAt: "desc" }
-  });
+  let stores: Awaited<ReturnType<typeof prisma.store.findMany>> = [];
+  type TerminalWithStore = Prisma.TerminalGetPayload<{ include: { store: true } }>;
+  let terminals: TerminalWithStore[] = [];
+
+  try {
+    stores = await prisma.store.findMany({
+      where:
+        session.user.role === "ADMIN" && session.user.storeId
+          ? { id: session.user.storeId }
+          : undefined,
+      orderBy: { name: "asc" }
+    });
+  } catch (error) {
+    console.error("[terminal-mgmt:stores]", error);
+    stores = [];
+  }
+
+  const normalizedStores = stores.length > 0 ? stores : [defaultStore];
+
+  try {
+    terminals = await prisma.terminal.findMany({
+      where:
+        session.user.role === "ADMIN" && session.user.storeId
+          ? { storeId: session.user.storeId }
+          : undefined,
+      include: { store: true },
+      orderBy: { createdAt: "desc" }
+    });
+  } catch (error) {
+    console.error("[terminal-mgmt:terminals]", error);
+    terminals = [];
+  }
 
   return (
     <div className="space-y-8">
@@ -99,14 +121,14 @@ export default async function TerminalManagementPage() {
               <Label>紐づけ店舗</Label>
               <Select
                 name="storeId"
-                defaultValue={stores.length === 1 ? stores[0].id : undefined}
+                defaultValue={normalizedStores[0]?.id ?? defaultStore.id}
                 disabled={session.user.role === "ADMIN"}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="店舗を選択" />
                 </SelectTrigger>
                 <SelectContent>
-                  {stores.map((store) => (
+                  {normalizedStores.map((store) => (
                     <SelectItem key={store.id} value={store.id}>
                       {store.name}
                     </SelectItem>
