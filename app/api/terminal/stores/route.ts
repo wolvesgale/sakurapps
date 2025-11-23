@@ -9,8 +9,13 @@ export async function GET() {
     const defaultStore = await getOrCreateDefaultStore();
 
     const casts = await prisma.user.findMany({
-      where: { role: "CAST", isActive: true, storeId: defaultStore.id },
-      select: { id: true, displayName: true }
+      where: {
+        isActive: true,
+        storeId: defaultStore.id,
+        role: { in: ["CAST", "DRIVER"] }
+      },
+      select: { id: true, displayName: true, role: true },
+      orderBy: { displayName: "asc" }
     });
 
     return NextResponse.json({

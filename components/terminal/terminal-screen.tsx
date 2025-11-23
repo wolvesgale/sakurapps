@@ -18,6 +18,7 @@ import {
 export type TerminalCast = {
   id: string;
   displayName: string;
+  role: "CAST" | "DRIVER";
 };
 
 type StoreInfo = {
@@ -122,18 +123,22 @@ export function TerminalScreen() {
     };
 
     fetchActive();
-    interval = setInterval(fetchActive, 30000);
+    interval = setInterval(() => {
+      fetchActive();
+    }, 15000);
 
     return () => {
-      if (interval) {
-        clearInterval(interval);
-      }
+      if (interval) clearInterval(interval);
     };
   }, [store?.id]);
 
   const handleAttendance = async (type: AttendanceAction) => {
     if (!selectedCastId || selectedCastId === NO_SELECTION) {
       setStatusMessage("キャストを選択してください");
+      return;
+    }
+    if (!store?.id) {
+      setStatusMessage("店舗情報が取得できていません");
       return;
     }
     setIsSubmitting(true);
@@ -203,15 +208,31 @@ export function TerminalScreen() {
 
   const renderedStoreName = store?.name ?? FALLBACK_STORE_NAME;
 
+  const castLabel = (cast: TerminalCast) => (
+    <div className="flex items-center gap-2">
+      <span>{cast.displayName}</span>
+      <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] uppercase text-slate-200">
+        {cast.role}
+      </span>
+    </div>
+  );
+
+  const selectableCasts = useMemo(() => casts, [casts]);
+
   return (
     <div className="space-y-8">
       <section className="rounded-3xl border border-slate-800 bg-black/80 p-6 shadow-lg">
         <div className="flex flex-col gap-2 text-center">
           <h1 className="text-3xl font-semibold text-pink-300">{renderedStoreName}</h1>
           <p className="text-sm text-slate-300">{currentTime}</p>
-          <p className="text-xs text-slate-500">
-            端末IDチェックは開発モードのためスキップされています
-          </p>
+          <p className="text-xs text-slate-500">端末IDチェックは開発モードのためスキップされています</p>
+        </div>
+        <div className="mt-4 flex justify-center">
+          <Link href="/">
+            <Button variant="secondary" size="sm">
+              TOPに戻る
+            </Button>
+          </Link>
         </div>
         <div className="mt-4 flex justify-center">
           <Link href="/">
@@ -225,7 +246,7 @@ export function TerminalScreen() {
       <section className="grid gap-6 md:grid-cols-2">
         <div className="space-y-4 rounded-2xl border border-slate-800 bg-black/70 p-6">
           <div className="space-y-2">
-            <Label>キャスト選択</Label>
+            <Label>スタッフ選択</Label>
             <Select
               value={selectedCastId}
               onValueChange={(value) => {
@@ -234,20 +255,20 @@ export function TerminalScreen() {
               disabled={isLoadingStore}
             >
               <SelectTrigger>
-                <SelectValue placeholder={isLoadingStore ? "読込中..." : "キャストを選択"} />
+                <SelectValue placeholder={isLoadingStore ? "読込中..." : "スタッフを選択"} />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={NO_SELECTION} disabled>
-                  キャストを選択
+                  スタッフを選択
                 </SelectItem>
-                {casts.length === 0 ? (
+                {selectableCasts.length === 0 ? (
                   <SelectItem value="__no_cast__" disabled>
-                    キャストが登録されていません
+                    スタッフが登録されていません
                   </SelectItem>
                 ) : (
-                  casts.map((cast) => (
+                  selectableCasts.map((cast) => (
                     <SelectItem key={cast.id} value={cast.id}>
-                      {cast.displayName}
+                      {castLabel(cast)}
                     </SelectItem>
                   ))
                 )}
@@ -360,23 +381,23 @@ export function TerminalScreen() {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="saleCast">キャスト選択</Label>
+            <Label htmlFor="saleCast">売上担当スタッフ</Label>
             <Select value={saleCastId} onValueChange={setSaleCastId} disabled={isLoadingStore}>
               <SelectTrigger>
-                <SelectValue placeholder={isLoadingStore ? "読込中..." : "キャストを選択"} />
+                <SelectValue placeholder={isLoadingStore ? "読込中..." : "スタッフを選択"} />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={NO_SELECTION} disabled>
-                  キャストを選択
+                  スタッフを選択
                 </SelectItem>
-                {casts.length === 0 ? (
+                {selectableCasts.length === 0 ? (
                   <SelectItem value="__no_cast__" disabled>
-                    キャストが登録されていません
+                    スタッフが登録されていません
                   </SelectItem>
                 ) : (
-                  casts.map((cast) => (
+                  selectableCasts.map((cast) => (
                     <SelectItem key={cast.id} value={cast.id}>
-                      {cast.displayName}
+                      {castLabel(cast)}
                     </SelectItem>
                   ))
                 )}
