@@ -222,81 +222,82 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
   const monthStart = startOfMonth(selectedDate);
   const monthEnd = endOfMonth(selectedDate);
 
-  const casts = await prisma.user.findMany({
-    where: {
-      role: "CAST",
-      isActive: true,
-      storeId: activeStoreId
-    },
-    orderBy: { displayName: "asc" }
-  });
-
-  const selectedCastId =
-    searchParams?.staffId && casts.some((c) => c.id === searchParams.staffId)
-      ? searchParams.staffId
-      : undefined;
-
-  const [attendances, sales, monthlyAttendances, approvals] = await Promise.all([
-    prisma.attendance.findMany({
+  try {
+    const casts = await prisma.user.findMany({
       where: {
-        timestamp: { gte: selectedDate, lt: dayEnd },
-        storeId: activeStoreId,
-        ...(selectedCastId ? { userId: selectedCastId } : {})
-      },
-      include: { user: true, store: true, approvedBy: true },
-      orderBy: { timestamp: "asc" }
-    }),
-    prisma.sale.findMany({
-      where: {
-        createdAt: { gte: selectedDate, lt: dayEnd },
-        storeId: activeStoreId,
-        ...(selectedCastId ? { staffId: selectedCastId } : {})
-      },
-      include: { staff: true, store: true },
-      orderBy: { createdAt: "desc" }
-    }),
-    prisma.attendance.findMany({
-      where: {
-        timestamp: { gte: monthStart, lt: addDays(monthEnd, 1) },
+        role: "CAST",
+        isActive: true,
         storeId: activeStoreId
       },
-      include: { user: true },
-      orderBy: { timestamp: "asc" }
-    }),
-    prisma.attendanceApproval.findMany({
-      where: {
-        date: { gte: monthStart, lt: addDays(monthEnd, 1) },
-        storeId: activeStoreId
-      },
-      include: { approvedBy: true, store: true }
-    })
-  ]);
+      orderBy: { displayName: "asc" }
+    });
 
-  const salesTotal = sales.reduce((sum, sale) => sum + sale.amount, 0);
-  const calendarDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
-  const attendanceByDate = monthlyAttendances.reduce<Record<string, typeof monthlyAttendances[number][]>>(
-    (acc, record) => {
-      const key = format(record.timestamp, "yyyy-MM-dd");
-      acc[key] = acc[key] ? [...acc[key], record] : [record];
+    const selectedCastId =
+      searchParams?.staffId && casts.some((c) => c.id === searchParams.staffId)
+        ? searchParams.staffId
+        : undefined;
+
+    const [attendances, sales, monthlyAttendances, approvals] = await Promise.all([
+      prisma.attendance.findMany({
+        where: {
+          timestamp: { gte: selectedDate, lt: dayEnd },
+          storeId: activeStoreId,
+          ...(selectedCastId ? { userId: selectedCastId } : {})
+        },
+        include: { user: true, store: true, approvedBy: true },
+        orderBy: { timestamp: "asc" }
+      }),
+      prisma.sale.findMany({
+        where: {
+          createdAt: { gte: selectedDate, lt: dayEnd },
+          storeId: activeStoreId,
+          ...(selectedCastId ? { staffId: selectedCastId } : {})
+        },
+        include: { staff: true, store: true },
+        orderBy: { createdAt: "desc" }
+      }),
+      prisma.attendance.findMany({
+        where: {
+          timestamp: { gte: monthStart, lt: addDays(monthEnd, 1) },
+          storeId: activeStoreId
+        },
+        include: { user: true },
+        orderBy: { timestamp: "asc" }
+      }),
+      prisma.attendanceApproval.findMany({
+        where: {
+          date: { gte: monthStart, lt: addDays(monthEnd, 1) },
+          storeId: activeStoreId
+        },
+        include: { approvedBy: true, store: true }
+      })
+    ]);
+
+    const salesTotal = sales.reduce((sum, sale) => sum + sale.amount, 0);
+    const calendarDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
+    const attendanceByDate = monthlyAttendances.reduce<Record<string, typeof monthlyAttendances[number][]>>(
+      (acc, record) => {
+        const key = format(record.timestamp, "yyyy-MM-dd");
+        acc[key] = acc[key] ? [...acc[key], record] : [record];
+        return acc;
+      },
+      {}
+    );
+
+    const approvalByDate = approvals.reduce<Record<string, (typeof approvals)[number]>>((acc, approval) => {
+      const key = `${approval.storeId}-${format(approval.date, "yyyy-MM-dd")}`;
+      acc[key] = approval;
       return acc;
-    },
-    {}
-  );
+    }, {});
 
-  const approvalByDate = approvals.reduce<Record<string, (typeof approvals)[number]>>((acc, approval) => {
-    const key = `${approval.storeId}-${format(approval.date, "yyyy-MM-dd")}`;
-    acc[key] = approval;
-    return acc;
-  }, {});
+    const approvalKey = `${activeStoreId}-${format(selectedDate, "yyyy-MM-dd")}`;
+    const selectedApproval = approvalByDate[approvalKey];
 
-  const approvalKey = `${activeStoreId}-${format(selectedDate, "yyyy-MM-dd")}`;
-  const selectedApproval = approvalByDate[approvalKey];
+    const selectedCastMonthlyRecords = selectedCastId
+      ? monthlyAttendances.filter((record) => record.userId === selectedCastId)
+      : [];
 
-  const selectedCastMonthlyRecords = selectedCastId
-    ? monthlyAttendances.filter((record) => record.userId === selectedCastId)
-    : [];
-
-  const staffSelectValue = selectedCastId ?? "__all__";
+    const staffSelectValue = selectedCastId ?? "__all__";
 
   return (
     <div className="space-y-8">
@@ -512,4 +513,12 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
       ) : null}
     </div>
   );
+  } catch (error) {
+    console.error("[reports] render", error);
+    return (
+      <div className="rounded-lg border border-red-900/40 bg-red-950/30 p-6 text-sm text-red-100">
+        レポートデータの読み込みに失敗しました。時間をおいて再度お試しください。
+      </div>
+    );
+  }
 }

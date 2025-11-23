@@ -38,12 +38,13 @@ type AttendanceAction = "CLOCK_IN" | "CLOCK_OUT" | "BREAK_START" | "BREAK_END";
 type PaymentMethod = "CASH" | "PAYPAY" | "CARD";
 
 const FALLBACK_STORE_NAME = "Nest SAKURA";
+const NO_SELECTION = "__none__";
 
 export function TerminalScreen() {
   const [store, setStore] = useState<StoreInfo | null>(null);
   const [casts, setCasts] = useState<TerminalCast[]>([]);
-  const [selectedCastId, setSelectedCastId] = useState<string | undefined>(undefined);
-  const [saleCastId, setSaleCastId] = useState<string | undefined>(undefined);
+  const [selectedCastId, setSelectedCastId] = useState<string>(NO_SELECTION);
+  const [saleCastId, setSaleCastId] = useState<string>(NO_SELECTION);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [currentTime, setCurrentTime] = useState<string>(
@@ -83,8 +84,8 @@ export function TerminalScreen() {
             closingTime: firstStore.closingTime
           });
           setCasts(firstStore.casts ?? []);
-          setSelectedCastId(undefined);
-          setSaleCastId(undefined);
+          setSelectedCastId(NO_SELECTION);
+          setSaleCastId(NO_SELECTION);
         } else {
           setStore({ id: "dev-store", name: FALLBACK_STORE_NAME, openingTime: null, closingTime: null });
           setCasts([]);
@@ -130,7 +131,7 @@ export function TerminalScreen() {
   }, [store?.id]);
 
   const handleAttendance = async (type: AttendanceAction) => {
-    if (!selectedCastId) {
+    if (!selectedCastId || selectedCastId === NO_SELECTION) {
       setStatusMessage("キャストを選択してください");
       return;
     }
@@ -162,7 +163,7 @@ export function TerminalScreen() {
   };
 
   const handleSale = async () => {
-    if (!saleCastId) {
+    if (!saleCastId || saleCastId === NO_SELECTION) {
       setStatusMessage("売上対象のキャストを選択してください");
       return;
     }
@@ -191,6 +192,7 @@ export function TerminalScreen() {
       }
       setStatusMessage("売上を登録しました");
       setSaleAmount("0");
+      setSaleCastId(NO_SELECTION);
     } catch (err) {
       setStatusMessage((err as Error).message);
     } finally {
@@ -227,6 +229,9 @@ export function TerminalScreen() {
                 <SelectValue placeholder={isLoadingStore ? "読込中..." : "キャストを選択"} />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value={NO_SELECTION} disabled>
+                  キャストを選択
+                </SelectItem>
                 {casts.length === 0 ? (
                   <SelectItem value="__no_cast__" disabled>
                     キャストが登録されていません
@@ -258,7 +263,7 @@ export function TerminalScreen() {
           <div className="grid grid-cols-2 gap-3 text-lg font-semibold">
             <Button
               className="h-16 text-lg"
-              disabled={isSubmitting || !selectedCastId || !store?.id}
+              disabled={isSubmitting || selectedCastId === NO_SELECTION || !store?.id}
               onClick={() => handleAttendance("CLOCK_IN")}
             >
               出勤
@@ -266,7 +271,7 @@ export function TerminalScreen() {
             <Button
               className="h-16 text-lg"
               variant="secondary"
-              disabled={isSubmitting || !selectedCastId || !store?.id}
+              disabled={isSubmitting || selectedCastId === NO_SELECTION || !store?.id}
               onClick={() => handleAttendance("CLOCK_OUT")}
             >
               退勤
@@ -274,7 +279,7 @@ export function TerminalScreen() {
             <Button
               className="h-16 text-lg"
               variant="secondary"
-              disabled={isSubmitting || !selectedCastId || !store?.id}
+              disabled={isSubmitting || selectedCastId === NO_SELECTION || !store?.id}
               onClick={() => handleAttendance("BREAK_START")}
             >
               休憩開始
@@ -282,7 +287,7 @@ export function TerminalScreen() {
             <Button
               className="h-16 text-lg"
               variant="secondary"
-              disabled={isSubmitting || !selectedCastId || !store?.id}
+              disabled={isSubmitting || selectedCastId === NO_SELECTION || !store?.id}
               onClick={() => handleAttendance("BREAK_END")}
             >
               休憩終了
@@ -353,6 +358,9 @@ export function TerminalScreen() {
                 <SelectValue placeholder={isLoadingStore ? "読込中..." : "キャストを選択"} />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value={NO_SELECTION} disabled>
+                  キャストを選択
+                </SelectItem>
                 {casts.length === 0 ? (
                   <SelectItem value="__no_cast__" disabled>
                     キャストが登録されていません
@@ -379,7 +387,7 @@ export function TerminalScreen() {
           </div>
           <Button
             className="h-14 w-full text-lg"
-            disabled={isSubmitting || !saleCastId || !store?.id}
+            disabled={isSubmitting || saleCastId === NO_SELECTION || !store?.id}
             onClick={handleSale}
           >
             売上を登録

@@ -111,16 +111,24 @@ export default async function StaffPage() {
 
   const defaultStore = await getOrCreateDefaultStore();
 
-  const staff = await prisma.user.findMany({
-    where: {
-      role: { in: ["CAST", "DRIVER"] },
-      ...(session.user.role === "ADMIN" && session.user.storeId
-        ? { storeId: session.user.storeId }
-        : {})
-    },
-    include: { store: true },
-    orderBy: { displayName: "asc" }
-  });
+  type StaffWithStore = Prisma.UserGetPayload<{ include: { store: true } }>;
+  let staff: StaffWithStore[] = [];
+
+  try {
+    staff = await prisma.user.findMany({
+      where: {
+        role: { in: ["CAST", "DRIVER"] },
+        ...(session.user.role === "ADMIN" && session.user.storeId
+          ? { storeId: session.user.storeId }
+          : {})
+      },
+      include: { store: true },
+      orderBy: { displayName: "asc" }
+    });
+  } catch (error) {
+    console.error("[staff:list]", error);
+    staff = [];
+  }
 
   return (
     <div className="space-y-8">

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { getOrCreateDefaultStore } from "@/lib/store";
@@ -64,24 +65,38 @@ export default async function TerminalManagementPage() {
 
   const defaultStore = await getOrCreateDefaultStore();
 
-  const stores = await prisma.store.findMany({
-    where:
-      session.user.role === "ADMIN" && session.user.storeId
-        ? { id: session.user.storeId }
-        : undefined,
-    orderBy: { name: "asc" }
-  });
+  let stores: Awaited<ReturnType<typeof prisma.store.findMany>> = [];
+  type TerminalWithStore = Prisma.TerminalGetPayload<{ include: { store: true } }>;
+  let terminals: TerminalWithStore[] = [];
+
+  try {
+    stores = await prisma.store.findMany({
+      where:
+        session.user.role === "ADMIN" && session.user.storeId
+          ? { id: session.user.storeId }
+          : undefined,
+      orderBy: { name: "asc" }
+    });
+  } catch (error) {
+    console.error("[terminal-mgmt:stores]", error);
+    stores = [];
+  }
 
   const normalizedStores = stores.length > 0 ? stores : [defaultStore];
 
-  const terminals = await prisma.terminal.findMany({
-    where:
-      session.user.role === "ADMIN" && session.user.storeId
-        ? { storeId: session.user.storeId }
-        : undefined,
-    include: { store: true },
-    orderBy: { createdAt: "desc" }
-  });
+  try {
+    terminals = await prisma.terminal.findMany({
+      where:
+        session.user.role === "ADMIN" && session.user.storeId
+          ? { storeId: session.user.storeId }
+          : undefined,
+      include: { store: true },
+      orderBy: { createdAt: "desc" }
+    });
+  } catch (error) {
+    console.error("[terminal-mgmt:terminals]", error);
+    terminals = [];
+  }
 
   return (
     <div className="space-y-8">

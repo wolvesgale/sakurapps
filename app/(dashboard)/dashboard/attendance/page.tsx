@@ -133,46 +133,47 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
   const monthStart = startOfMonth(new Date(`${monthParam}-01`));
   const monthEnd = endOfMonth(monthStart);
 
-  const staffList = await prisma.user.findMany({
-    where: { role: { in: ["CAST", "DRIVER"] }, isActive: true, storeId: activeStoreId },
-    orderBy: { displayName: "asc" }
-  });
+  try {
+    const staffList = await prisma.user.findMany({
+      where: { role: { in: ["CAST", "DRIVER"] }, isActive: true, storeId: activeStoreId },
+      orderBy: { displayName: "asc" }
+    });
 
-  const staffFilterParam = searchParams?.staffId;
-  const selectedStaffId =
-    staffFilterParam && staffFilterParam !== "__all__" && staffList.some((staff) => staff.id === staffFilterParam)
-      ? staffFilterParam
-      : undefined;
+    const staffFilterParam = searchParams?.staffId;
+    const selectedStaffId =
+      staffFilterParam && staffFilterParam !== "__all__" && staffList.some((staff) => staff.id === staffFilterParam)
+        ? staffFilterParam
+        : undefined;
 
-  const attendances = await prisma.attendance.findMany({
-    where: {
-      storeId: activeStoreId,
-      timestamp: { gte: monthStart, lt: addDays(monthEnd, 1) },
-      ...(selectedStaffId ? { userId: selectedStaffId } : {})
-    },
-    include: { user: true, approvedBy: true },
-    orderBy: { timestamp: "asc" }
-  });
+    const attendances = await prisma.attendance.findMany({
+      where: {
+        storeId: activeStoreId,
+        timestamp: { gte: monthStart, lt: addDays(monthEnd, 1) },
+        ...(selectedStaffId ? { userId: selectedStaffId } : {})
+      },
+      include: { user: true, approvedBy: true },
+      orderBy: { timestamp: "asc" }
+    });
 
-  const calendarDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
-  const attendanceByDate = attendances.reduce<Record<string, (typeof attendances)[number][]>>((acc, record) => {
-    const key = format(record.timestamp, "yyyy-MM-dd");
-    acc[key] = acc[key] ? [...acc[key], record] : [record];
-    return acc;
-  }, {});
+    const calendarDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
+    const attendanceByDate = attendances.reduce<Record<string, (typeof attendances)[number][]>>((acc, record) => {
+      const key = format(record.timestamp, "yyyy-MM-dd");
+      acc[key] = acc[key] ? [...acc[key], record] : [record];
+      return acc;
+    }, {});
 
-  const totalRecords = attendances.length;
-  const approvedCount = attendances.filter((a) => a.approvedAt).length;
-  const salesTotal = await prisma.sale.aggregate({
-    _sum: { amount: true },
-    where: {
-      storeId: activeStoreId,
-      createdAt: { gte: monthStart, lt: addDays(monthEnd, 1) },
-      ...(selectedStaffId ? { staffId: selectedStaffId } : {})
-    }
-  });
+    const totalRecords = attendances.length;
+    const approvedCount = attendances.filter((a) => a.approvedAt).length;
+    const salesTotal = await prisma.sale.aggregate({
+      _sum: { amount: true },
+      where: {
+        storeId: activeStoreId,
+        createdAt: { gte: monthStart, lt: addDays(monthEnd, 1) },
+        ...(selectedStaffId ? { staffId: selectedStaffId } : {})
+      }
+    });
 
-  const staffSelectValue = selectedStaffId ?? "__all__";
+    const staffSelectValue = selectedStaffId ?? "__all__";
 
   return (
     <div className="space-y-8">
@@ -353,4 +354,12 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
       </Card>
     </div>
   );
+  } catch (error) {
+    console.error("[attendance] render", error);
+    return (
+      <div className="rounded-lg border border-red-900/40 bg-red-950/30 p-6 text-sm text-red-100">
+        勤怠データの読み込みに失敗しました。時間をおいて再度お試しください。
+      </div>
+    );
+  }
 }
