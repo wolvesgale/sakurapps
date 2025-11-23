@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { hashPassword, isStrongPassword } from "@/lib/auth";
@@ -98,19 +98,37 @@ async function createStaff(formData: FormData) {
       data
     });
   } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      const message =
+        "このユーザーIDは既に使用されています。別のIDを入力してください。";
+      redirect(`/dashboard/staff?error=${encodeURIComponent(message)}`);
+    }
+
     console.error("[staff:create]", error);
     throw new Error("スタッフ作成に失敗しました。入力内容を確認してください。");
   }
 
   revalidatePath("/dashboard/staff");
+  redirect("/dashboard/staff");
 }
 
-export default async function StaffPage() {
+type StaffPageProps = {
+  searchParams?: {
+    error?: string;
+  };
+};
+
+export default async function StaffPage({ searchParams }: StaffPageProps) {
   const session = await getCurrentSession();
 
   if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) {
     redirect("/dashboard");
   }
+
+  const errorMessage = searchParams?.error ?? null;
 
   const defaultStore = await getOrCreateDefaultStore();
 
@@ -190,6 +208,9 @@ export default async function StaffPage() {
             <div className="rounded-md border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-400 sm:col-span-2">
               店舗選択は Nest SAKURA 固定です。マルチ店舗運用は現在無効化しています。
             </div>
+            {errorMessage && (
+              <p className="sm:col-span-2 text-sm text-red-400">{errorMessage}</p>
+            )}
             <Button type="submit" className="sm:col-span-2">
               スタッフを作成
             </Button>
