@@ -39,29 +39,29 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized terminal" }, { status: 403 });
     }
 
-    const cast = await prisma.user.findFirst({
+    const staff = await prisma.user.findFirst({
       where: {
         id: staffId,
-        role: "CAST",
+        role: { in: ["CAST", "DRIVER"] },
         isActive: true
       }
     });
 
-    if (!cast) {
-      return NextResponse.json({ error: "Cast not found" }, { status: 404 });
+    if (!staff) {
+      return NextResponse.json({ error: "Staff not found" }, { status: 404 });
     }
 
     if (terminal.storeId !== targetStoreId) {
       return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
     }
 
-    if (cast.storeId && cast.storeId !== targetStoreId) {
+    if (staff.storeId && staff.storeId !== targetStoreId) {
       return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
     }
 
     const sale = await prisma.sale.create({
       data: {
-        staffId: cast.id,
+        staffId: staff.id,
         storeId: targetStoreId,
         paymentMethod,
         amount: Math.trunc(amount)
