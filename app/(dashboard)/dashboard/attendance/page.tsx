@@ -266,6 +266,7 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
         : startOfDay(monthStart);
     const selectedDayKey = format(selectedDay, "yyyy-MM-dd");
     const selectedDayAttendances = attendanceByDate[selectedDayKey] ?? [];
+    const hasSelectedDayRecords = selectedDayAttendances.length > 0;
 
     const groupedByStaff = selectedDayAttendances.reduce<
       Record<string, { staffName: string; records: AttendanceRecord[]; isApproved: boolean }>
@@ -413,23 +414,25 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                 {selectedDayApproved ? "承認済みです" : "未承認です。必要に応じて承認してください。"}
               </CardDescription>
             </div>
-            <div className="flex gap-2">
-              {selectedDayApproved ? (
-                <form action={unapproveDay}>
-                  <input type="hidden" name="date" value={selectedDay.toISOString()} />
-                  <Button type="submit" variant="secondary" size="sm">
-                    承認取消
-                  </Button>
-                </form>
-              ) : (
-                <form action={approveDay}>
-                  <input type="hidden" name="date" value={selectedDay.toISOString()} />
-                  <Button type="submit" size="sm">
-                    承認
-                  </Button>
-                </form>
-              )}
-            </div>
+            {hasSelectedDayRecords ? (
+              <div className="flex gap-2">
+                {selectedDayApproved ? (
+                  <form action={unapproveDay}>
+                    <input type="hidden" name="date" value={selectedDay.toISOString()} />
+                    <Button type="submit" variant="secondary" size="sm">
+                      承認取消
+                    </Button>
+                  </form>
+                ) : (
+                  <form action={approveDay}>
+                    <input type="hidden" name="date" value={selectedDay.toISOString()} />
+                    <Button type="submit" size="sm">
+                      承認
+                    </Button>
+                  </form>
+                )}
+              </div>
+            ) : null}
           </CardHeader>
           <CardContent className="space-y-4">
             {selectedDayAttendances.length === 0 ? (
