@@ -42,7 +42,9 @@ CREATE TABLE "Attendance" (
     "storeId" TEXT NOT NULL REFERENCES "Store"(id) ON DELETE CASCADE,
     type "AttendanceType" NOT NULL,
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    "isCompanion" BOOLEAN NOT NULL DEFAULT FALSE
+    "isCompanion" BOOLEAN NOT NULL DEFAULT FALSE,
+    "approvedAt" TIMESTAMPTZ,
+    "approvedById" TEXT REFERENCES "User"(id) ON DELETE SET NULL
 );
 
 CREATE TABLE "AttendanceApproval" (

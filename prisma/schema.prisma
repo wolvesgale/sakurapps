@@ -45,6 +45,7 @@ model User {
   sales        Sale[]        @relation("UserSales")
   rides        Ride[]          @relation("DriverRides")
   approvedDays AttendanceApproval[] @relation("AttendanceApprovalApprovedBy")
+  approvedAttendances Attendance[] @relation("AttendanceApprovedBy")
 }
 
 model Store {
@@ -72,9 +73,12 @@ model Attendance {
   type      AttendanceType
   timestamp DateTime        @default(now())
   isCompanion Boolean       @default(false)
+  approvedAt DateTime?
+  approvedById String?
 
   user  User  @relation(fields: [userId], references: [id])
   store Store @relation(fields: [storeId], references: [id])
+  approvedBy User? @relation("AttendanceApprovedBy", fields: [approvedById], references: [id])
 }
 
 model AttendanceApproval {

@@ -22,7 +22,11 @@ export async function POST(request: Request) {
         isCompanion?: boolean;
       };
 
-    const resolvedType = type ?? action;
+    const normalizedType = (action ?? type)
+      ? (action ?? type)?.toString().replace(/-/g, "_").toUpperCase()
+      : undefined;
+
+    const resolvedType = allowedTypes.find((candidate) => candidate === normalizedType);
 
     if (!staffId || !resolvedType || !allowedTypes.includes(resolvedType)) {
       return NextResponse.json({ error: "Invalid request" }, { status: 400 });

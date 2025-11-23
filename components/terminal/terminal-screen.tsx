@@ -42,8 +42,8 @@ const FALLBACK_STORE_NAME = "Nest SAKURA";
 export function TerminalScreen() {
   const [store, setStore] = useState<StoreInfo | null>(null);
   const [casts, setCasts] = useState<TerminalCast[]>([]);
-  const [selectedCastId, setSelectedCastId] = useState<string>("");
-  const [saleCastId, setSaleCastId] = useState<string>("");
+  const [selectedCastId, setSelectedCastId] = useState<string | undefined>(undefined);
+  const [saleCastId, setSaleCastId] = useState<string | undefined>(undefined);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [currentTime, setCurrentTime] = useState<string>(
@@ -83,13 +83,15 @@ export function TerminalScreen() {
             closingTime: firstStore.closingTime
           });
           setCasts(firstStore.casts ?? []);
+          setSelectedCastId(undefined);
+          setSaleCastId(undefined);
         } else {
-          setStore({ id: null, name: FALLBACK_STORE_NAME, openingTime: null, closingTime: null });
+          setStore({ id: "dev-store", name: FALLBACK_STORE_NAME, openingTime: null, closingTime: null });
           setCasts([]);
         }
       } catch (error) {
         console.error(error);
-        setStore({ id: null, name: FALLBACK_STORE_NAME, openingTime: null, closingTime: null });
+        setStore({ id: "dev-store", name: FALLBACK_STORE_NAME, openingTime: null, closingTime: null });
         setCasts([]);
       } finally {
         setIsLoadingStore(false);
@@ -226,7 +228,7 @@ export function TerminalScreen() {
               </SelectTrigger>
               <SelectContent>
                 {casts.length === 0 ? (
-                  <SelectItem value="" disabled>
+                  <SelectItem value="__no_cast__" disabled>
                     キャストが登録されていません
                   </SelectItem>
                 ) : (
@@ -352,7 +354,7 @@ export function TerminalScreen() {
               </SelectTrigger>
               <SelectContent>
                 {casts.length === 0 ? (
-                  <SelectItem value="" disabled>
+                  <SelectItem value="__no_cast__" disabled>
                     キャストが登録されていません
                   </SelectItem>
                 ) : (
