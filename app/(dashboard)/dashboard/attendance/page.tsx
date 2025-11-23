@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import {
   addDays,
+  differenceInMinutes,
   eachDayOfInterval,
   endOfMonth,
   format,
@@ -32,6 +33,10 @@ const attendanceLabels: Record<string, string> = {
   BREAK_END: "休憩終了"
 };
 
+const TZ = "Asia/Tokyo";
+
+const toJst = (date: Date) => new Date(date.toLocaleString("en-US", { timeZone: TZ }));
+
 type AttendanceRecord = Prisma.AttendanceGetPayload<{ include: { user: true; approvedBy: true } }>;
 
 type AttendancePageProps = {
@@ -41,6 +46,63 @@ type AttendancePageProps = {
     day?: string;
   };
 };
+
+type DaySummary = {
+  clockInJst: Date | null;
+  clockOutJst: Date | null;
+  workingMinutes: number;
+};
+
+function buildDaySummary(records: AttendanceRecord[]): DaySummary {
+  if (records.length === 0) return { clockInJst: null, clockOutJst: null, workingMinutes: 0 };
+
+  const events = records
+    .map((record) => ({ ...record, jst: toJst(record.timestamp) }))
+    .sort((a, b) => a.jst.getTime() - b.jst.getTime());
+
+  const clockInEvent = events.find((e) => e.type === "CLOCK_IN");
+  const clockOutEvent = [...events].reverse().find((e) => e.type === "CLOCK_OUT");
+
+  let workingMinutes = 0;
+  let currentStart: Date | null = null;
+  let inBreak = false;
+
+  for (const event of events) {
+    switch (event.type) {
+      case "CLOCK_IN": {
+        currentStart = event.jst;
+        inBreak = false;
+        break;
+      }
+      case "BREAK_START": {
+        if (currentStart && !inBreak) {
+          workingMinutes += differenceInMinutes(event.jst, currentStart);
+          currentStart = null;
+        }
+        inBreak = true;
+        break;
+      }
+      case "BREAK_END": {
+        if (inBreak) {
+          currentStart = event.jst;
+          inBreak = false;
+        }
+        break;
+      }
+      case "CLOCK_OUT": {
+        if (currentStart && !inBreak) {
+          workingMinutes += differenceInMinutes(event.jst, currentStart);
+          currentStart = null;
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  return { clockInJst: clockInEvent?.jst ?? null, clockOutJst: clockOutEvent?.jst ?? null, workingMinutes };
+}
 
 async function deleteAttendance(formData: FormData) {
   "use server";
@@ -214,6 +276,20 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
     const selectedDayKey = format(selectedDay, "yyyy-MM-dd");
     const selectedDayAttendances = attendanceByDate[selectedDayKey] ?? [];
 
+    const groupedByStaff = selectedDayAttendances.reduce<
+      Record<string, { staffName: string; records: AttendanceRecord[]; isApproved: boolean }>
+    >((acc, record) => {
+      const key = record.userId;
+      const existing = acc[key];
+      const updatedRecords = existing ? [...existing.records, record] : [record];
+      acc[key] = {
+        staffName: record.user.displayName,
+        records: updatedRecords.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime()),
+        isApproved: updatedRecords.every((r) => Boolean(r.approvedAt))
+      };
+      return acc;
+    }, {});
+
     const selectedDayApproved =
       approvalByDate[selectedDayKey] ??
       (selectedDayAttendances.length > 0 && selectedDayAttendances.every((attendance) => Boolean(attendance.approvedAt)));
@@ -372,58 +448,92 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
               <p className="text-sm text-slate-400">勤怠記録がありません。</p>
             ) : (
               <ul className="space-y-3 text-sm">
-                {selectedDayAttendances.map((attendance) => (
-                  <li key={attendance.id} className="space-y-2 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <p className="text-base font-semibold text-pink-200">{attendance.user.displayName}</p>
-                        <p className="text-xs text-slate-400">
-                          {format(attendance.timestamp, "HH:mm", { locale: ja })} / {" "}
-                          {attendanceLabels[attendance.type] ?? attendance.type}
-                        </p>
-                        <p className="text-xs text-slate-400">同伴: {attendance.isCompanion ? "はい" : "いいえ"}</p>
-                        <p className="text-xs text-slate-500">
-                          {attendance.approvedAt
-                            ? `承認済 (${format(attendance.approvedAt, "MM/dd HH:mm")})`
-                            : "未承認"}
-                        </p>
+                {Object.entries(groupedByStaff).map(([staffId, group]) => {
+                  const summary = buildDaySummary(group.records);
+                  const approvedLabel = group.isApproved ? "承認済み" : "未承認";
+
+                  return (
+                    <li key={staffId} className="space-y-3 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-base font-semibold text-pink-200">{group.staffName}</p>
+                          <p className="text-xs text-slate-400">{approvedLabel}</p>
+                        </div>
+                        <div className="text-right text-xs text-slate-400">
+                          出勤時間：
+                          {summary.clockInJst ? format(summary.clockInJst, "HH:mm") : "—"}
+                          <br />
+                          退勤時間：
+                          {summary.clockOutJst ? format(summary.clockOutJst, "HH:mm") : "未退勤"}
+                          <br />
+                          結果：
+                          {`${Math.floor(summary.workingMinutes / 60)}時間${summary.workingMinutes % 60}分`}
+                        </div>
                       </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <form action={deleteAttendance}>
-                          <input type="hidden" name="attendanceId" value={attendance.id} />
-                          <Button type="submit" size="sm" variant="destructive">
-                            削除
-                          </Button>
-                        </form>
-                      </div>
-                    </div>
-                    <form action={updateAttendance} className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
-                      <input type="hidden" name="attendanceId" value={attendance.id} />
-                      <div className="space-y-1">
-                        <Label className="text-xs text-slate-400">時刻</Label>
-                        <Input
-                          type="datetime-local"
-                          name="timestamp"
-                          defaultValue={format(attendance.timestamp, "yyyy-MM-dd'T'HH:mm")}
-                          className="md:w-64"
-                        />
-                      </div>
-                      <div className="flex items-center gap-2 pt-5 text-xs text-slate-200">
-                        <input
-                          type="checkbox"
-                          id={`companion-${attendance.id}`}
-                          name="isCompanion"
-                          defaultChecked={attendance.isCompanion}
-                          className="h-4 w-4 rounded border border-slate-700 bg-black text-pink-400 focus-visible:outline-none"
-                        />
-                        <Label htmlFor={`companion-${attendance.id}`}>同伴</Label>
-                      </div>
-                      <Button type="submit" size="sm" variant="secondary" className="md:mt-5">
-                        更新
-                      </Button>
-                    </form>
-                  </li>
-                ))}
+
+                      <details className="rounded-lg border border-slate-800/60 bg-black/40 p-3">
+                        <summary className="cursor-pointer text-xs text-slate-400">詳細を開く（個別の打刻・休憩・同伴編集）</summary>
+                        <div className="mt-3 space-y-3">
+                          {group.records.map((attendance) => {
+                            const jstTimestamp = toJst(attendance.timestamp);
+
+                            return (
+                              <div key={attendance.id} className="space-y-2 rounded-md border border-slate-800/70 bg-slate-950/50 p-3">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                  <div>
+                                    <p className="text-xs text-slate-400">
+                                      {format(jstTimestamp, "HH:mm", { locale: ja })} / {" "}
+                                      {attendanceLabels[attendance.type] ?? attendance.type}
+                                    </p>
+                                    <p className="text-xs text-slate-400">同伴: {attendance.isCompanion ? "はい" : "いいえ"}</p>
+                                    <p className="text-xs text-slate-500">
+                                      {attendance.approvedAt
+                                        ? `承認済 (${format(toJst(attendance.approvedAt), "MM/dd HH:mm")})`
+                                        : "未承認"}
+                                    </p>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <form action={deleteAttendance}>
+                                      <input type="hidden" name="attendanceId" value={attendance.id} />
+                                      <Button type="submit" size="sm" variant="destructive">
+                                        削除
+                                      </Button>
+                                    </form>
+                                  </div>
+                                </div>
+                                <form action={updateAttendance} className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
+                                  <input type="hidden" name="attendanceId" value={attendance.id} />
+                                  <div className="space-y-1">
+                                    <Label className="text-xs text-slate-400">時刻</Label>
+                                    <Input
+                                      type="datetime-local"
+                                      name="timestamp"
+                                      defaultValue={format(jstTimestamp, "yyyy-MM-dd'T'HH:mm")}
+                                      className="md:w-64"
+                                    />
+                                  </div>
+                                  <div className="flex items-center gap-2 pt-5 text-xs text-slate-200">
+                                    <input
+                                      type="checkbox"
+                                      id={`companion-${attendance.id}`}
+                                      name="isCompanion"
+                                      defaultChecked={attendance.isCompanion}
+                                      className="h-4 w-4 rounded border border-slate-700 bg-black text-pink-400 focus-visible:outline-none"
+                                    />
+                                    <Label htmlFor={`companion-${attendance.id}`}>同伴</Label>
+                                  </div>
+                                  <Button type="submit" size="sm" variant="secondary" className="md:mt-5">
+                                    更新
+                                  </Button>
+                                </form>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </details>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </CardContent>
