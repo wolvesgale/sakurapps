@@ -6,23 +6,31 @@ import { getOrCreateDefaultStore } from "./store";
 const RETENTION_DAYS = 2;
 
 export async function pruneOldAttendancePhotos() {
-  const cutoff = addDays(new Date(), -RETENTION_DAYS);
-  const oldPhotos = await prisma.attendancePhoto.findMany({
-    where: { createdAt: { lt: cutoff } }
-  });
+  try {
+    const cutoff = addDays(new Date(), -RETENTION_DAYS);
+    const oldPhotos = await prisma.attendancePhoto.findMany({
+      where: { createdAt: { lt: cutoff } }
+    });
 
-  for (const photo of oldPhotos) {
-    if (photo.photoUrl) {
-      try {
-        await del(photo.photoUrl);
-      } catch (error) {
-        console.error("[attendance-photo] failed to delete blob", { url: photo.photoUrl, error });
+    if (process.env.BLOB_READ_WRITE_TOKEN) {
+      for (const photo of oldPhotos) {
+        if (photo.photoUrl) {
+          try {
+            await del(photo.photoUrl);
+          } catch (error) {
+            console.error("[attendance-photo] failed to delete blob", { url: photo.photoUrl, error });
+          }
+        }
       }
+    } else {
+      console.warn("[attendance-photo] BLOB_READ_WRITE_TOKEN missing; skipping blob deletion");
     }
-  }
 
-  if (oldPhotos.length > 0) {
-    await prisma.attendancePhoto.deleteMany({ where: { id: { in: oldPhotos.map((p) => p.id) } } });
+    if (oldPhotos.length > 0) {
+      await prisma.attendancePhoto.deleteMany({ where: { id: { in: oldPhotos.map((p) => p.id) } } });
+    }
+  } catch (error) {
+    console.error("[attendance-photo] prune failed", error);
   }
 }
 

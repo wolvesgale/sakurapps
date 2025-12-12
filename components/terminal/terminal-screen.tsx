@@ -41,6 +41,7 @@ type PaymentMethod = "CASH" | "PAYPAY" | "CARD";
 
 const FALLBACK_STORE_NAME = "Nest SAKURA";
 const NO_SELECTION = "__none__";
+const SHOW_ACTIVE_STAFF = false; // 将来復活させる場合は true に戻す
 
 export function TerminalScreen() {
   const [store, setStore] = useState<StoreInfo | null>(null);
@@ -63,7 +64,6 @@ export function TerminalScreen() {
   const [capturedDataUrl, setCapturedDataUrl] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
@@ -126,7 +126,7 @@ export function TerminalScreen() {
   };
 
   useEffect(() => {
-    if (!store?.id) return;
+    if (!SHOW_ACTIVE_STAFF || !store?.id) return;
 
     let interval: ReturnType<typeof setInterval> | null = null;
 
@@ -136,6 +136,26 @@ export function TerminalScreen() {
         fetchActiveStaff(store.id);
       }
     }, 15000);
+
+    const startStream = async () => {
+      try {
+        setCameraError(null);
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: false
+        });
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+      } catch (error) {
+        console.error("[camera]", error);
+        setCameraError("カメラの起動に失敗しました。権限を確認してください。");
+      }
+    };
+
+    startStream();
 
     return () => {
       if (interval) clearInterval(interval);
@@ -177,34 +197,6 @@ export function TerminalScreen() {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
-    }
-  };
-
-  const handleFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    try {
-      const reader = new FileReader();
-
-      const dataUrl: string = await new Promise((resolve, reject) => {
-        reader.onload = () => {
-          if (typeof reader.result === "string") {
-            resolve(reader.result);
-          } else {
-            reject(new Error("画像の読み込みに失敗しました"));
-          }
-        };
-        reader.onerror = () => reject(new Error("画像の読み込みに失敗しました"));
-        reader.readAsDataURL(file);
-      });
-
-      setCapturedDataUrl(dataUrl);
-      stopStream();
-      setCameraError(null);
-    } catch (error) {
-      console.error("[file-upload]", error);
-      setStatusMessage("画像の読み込みに失敗しました。別の画像を選択してください。");
     }
   };
 
@@ -460,38 +452,40 @@ export function TerminalScreen() {
             </Button>
           </div>
 
-          <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-pink-200">現在出勤中</h3>
-              <p className="text-xs text-slate-500">{store?.name ?? FALLBACK_STORE_NAME}</p>
-            </div>
-            <div className="space-y-2">
-              {activeStaff.length === 0 ? (
-                <p className="text-sm text-slate-500">出勤中のキャストはいません。</p>
-              ) : (
-                activeStaff.map((member) => (
-                  <div
-                    key={member.id}
-                    className="flex items-center justify-between rounded-xl border border-slate-800 bg-black/60 px-3 py-2 text-sm text-slate-100"
-                  >
-                    <div className="flex flex-col">
-                      <span className="font-semibold">{member.displayName}</span>
-                      <span className="text-xs text-slate-400">
-                        {member.clockInAt ? `${format(new Date(member.clockInAt), "HH:mm")}〜` : "時間未取得"}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {member.isCompanion ? (
-                        <span className="rounded-full bg-pink-900/60 px-2 py-1 text-[10px] text-pink-100">
-                          同伴
+          {SHOW_ACTIVE_STAFF ? (
+            <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-pink-200">現在出勤中</h3>
+                <p className="text-xs text-slate-500">{store?.name ?? FALLBACK_STORE_NAME}</p>
+              </div>
+              <div className="space-y-2">
+                {activeStaff.length === 0 ? (
+                  <p className="text-sm text-slate-500">出勤中のキャストはいません。</p>
+                ) : (
+                  activeStaff.map((member) => (
+                    <div
+                      key={member.id}
+                      className="flex items-center justify-between rounded-xl border border-slate-800 bg-black/60 px-3 py-2 text-sm text-slate-100"
+                    >
+                      <div className="flex flex-col">
+                        <span className="font-semibold">{member.displayName}</span>
+                        <span className="text-xs text-slate-400">
+                          {member.clockInAt ? `${format(new Date(member.clockInAt), "HH:mm")}〜` : "時間未取得"}
                         </span>
-                      ) : null}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {member.isCompanion ? (
+                          <span className="rounded-full bg-pink-900/60 px-2 py-1 text-[10px] text-pink-100">
+                            同伴
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
-                  </div>
-                ))
-              )}
+                  ))
+                )}
+              </div>
             </div>
-          </div>
+          ) : null}
         </div>
 
         <div className="space-y-4 rounded-2xl border border-slate-800 bg-black/70 p-6">
@@ -584,17 +578,6 @@ export function TerminalScreen() {
             </div>
             {cameraError ? <p className="text-sm text-red-400">{cameraError}</p> : null}
             <div className="flex flex-wrap gap-2">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                capture="user"
-                className="hidden"
-                onChange={handleFileSelected}
-              />
-              <Button onClick={() => fileInputRef.current?.click()} disabled={isSubmitting}>
-                カメラで撮影/選択
-              </Button>
               {capturedDataUrl ? (
                 <>
                   <Button onClick={submitClockInWithPhoto} disabled={isSubmitting}>
@@ -614,8 +597,7 @@ export function TerminalScreen() {
               </Button>
             </div>
             <p className="text-xs text-slate-400">
-              iPhone Safari では「カメラで撮影/選択」ボタンからインカメラが起動します。権限を許可できない場合は
-              写真が取得できず出勤登録できません。
+              iPhone Safari ではインカメラが起動します。権限を許可できない場合は写真が取得できず出勤登録できません。
             </p>
           </div>
         </div>
