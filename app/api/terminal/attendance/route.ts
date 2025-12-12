@@ -12,7 +12,7 @@ type AttendanceType = (typeof allowedTypes)[number];
 
 export async function POST(request: Request) {
   try {
-    const { staffId, storeId, terminalId, type, action, isCompanion } =
+    const { staffId, storeId, terminalId, type, action, isCompanion, photoUrl } =
       (await request.json()) as {
         staffId?: string;
         storeId?: string;
@@ -20,6 +20,7 @@ export async function POST(request: Request) {
         type?: AttendanceType;
         action?: AttendanceType;
         isCompanion?: boolean;
+        photoUrl?: string;
       };
 
     const normalizedType = (action ?? type)
@@ -79,14 +80,33 @@ export async function POST(request: Request) {
       );
     }
 
-    const attendance = await prisma.attendance.create({
-      data: {
-        userId: staff.id,
-        storeId: targetStoreId,
-        type: resolvedType,
-        timestamp: new Date(),
-        isCompanion: resolvedType === "CLOCK_IN" ? Boolean(isCompanion) : false
+    if (resolvedType === "CLOCK_IN" && !photoUrl) {
+      return NextResponse.json({ error: "出勤時の写真が必要です" }, { status: 400 });
+    }
+
+    const attendance = await prisma.$transaction(async (tx) => {
+      const created = await tx.attendance.create({
+        data: {
+          userId: staff.id,
+          storeId: targetStoreId,
+          type: resolvedType,
+          timestamp: new Date(),
+          isCompanion: resolvedType === "CLOCK_IN" ? Boolean(isCompanion) : false
+        }
+      });
+
+      if (resolvedType === "CLOCK_IN" && photoUrl) {
+        await tx.attendancePhoto.create({
+          data: {
+            attendanceId: created.id,
+            storeId: targetStoreId,
+            staffId: staff.id,
+            photoUrl
+          }
+        });
       }
+
+      return created;
     });
 
     return NextResponse.json({ attendance });

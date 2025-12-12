@@ -17,6 +17,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { getOrCreateDefaultStore } from "@/lib/store";
 import { getMonthlyAttendanceSummary, updateDayApproval } from "@/lib/attendance";
+import { pruneOldAttendancePhotos } from "@/lib/attendance-photo";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,7 +37,7 @@ const TZ = "Asia/Tokyo";
 
 const toJst = (date: Date) => new Date(date.toLocaleString("en-US", { timeZone: TZ }));
 
-type AttendanceRecord = Prisma.AttendanceGetPayload<{ include: { user: true; approvedBy: true } }>;
+type AttendanceRecord = Prisma.AttendanceGetPayload<{ include: { user: true; approvedBy: true; photo: true } }>;
 
 type AttendancePageProps = {
   searchParams?: {
@@ -209,6 +210,8 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
   const activeStoreId = session.user.storeId ?? defaultStore.id;
 
   try {
+    await pruneOldAttendancePhotos();
+
     const monthParam = searchParams?.month;
     const parsedMonth =
       monthParam && /^\d{4}-\d{2}$/.test(monthParam) ? new Date(`${monthParam}-01`) : new Date();
@@ -231,7 +234,7 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
         timestamp: { gte: monthStart, lt: addDays(monthEnd, 1) },
         ...(selectedStaffId ? { userId: selectedStaffId } : {})
       },
-      include: { user: true, approvedBy: true },
+      include: { user: true, approvedBy: true, photo: true },
       orderBy: { timestamp: "asc" }
     });
 
@@ -442,6 +445,9 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                 {Object.entries(groupedByStaff).map(([staffId, group]) => {
                   const summary = buildDaySummary(group.records);
                   const approvedLabel = group.isApproved ? "承認済み" : "未承認";
+                  const clockInPhotos = group.records.filter(
+                    (record) => record.type === "CLOCK_IN" && record.photo
+                  );
 
                   return (
                     <li key={staffId} className="space-y-3 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
@@ -461,6 +467,34 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                           {`${Math.floor(summary.workingMinutes / 60)}時間${summary.workingMinutes % 60}分`}
                         </div>
                       </div>
+
+                      {clockInPhotos.length > 0 ? (
+                        <div className="rounded-lg border border-slate-800/70 bg-black/30 p-3">
+                          <p className="text-xs text-slate-300">出勤写真</p>
+                          <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                            {clockInPhotos.map((record) => (
+                              <a
+                                key={record.id}
+                                href={record.photo?.photoUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="group overflow-hidden rounded-lg border border-slate-800/60 bg-slate-950/40"
+                              >
+                                {record.photo?.photoUrl ? (
+                                  <img
+                                    src={record.photo.photoUrl}
+                                    alt={`${group.staffName} 出勤時の写真`}
+                                    className="h-32 w-full object-cover transition duration-200 group-hover:opacity-90"
+                                  />
+                                ) : null}
+                                <p className="px-2 py-1 text-[11px] text-slate-300">
+                                  {format(toJst(record.timestamp), "HH:mm", { locale: ja })}
+                                </p>
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
 
                       <details className="rounded-lg border border-slate-800/60 bg-black/40 p-3">
                         <summary className="cursor-pointer text-xs text-slate-400">詳細を開く（個別の打刻・休憩・同伴編集）</summary>

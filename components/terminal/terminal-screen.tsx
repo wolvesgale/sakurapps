@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import Link from "next/link";
@@ -57,6 +57,13 @@ export function TerminalScreen() {
   const [saleAmount, setSaleAmount] = useState("0");
   const [activeStaff, setActiveStaff] = useState<ActiveStaff[]>([]);
   const [isLoadingStore, setIsLoadingStore] = useState(false);
+
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [capturedDataUrl, setCapturedDataUrl] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -132,13 +139,55 @@ export function TerminalScreen() {
     };
   }, [store?.id]);
 
-  const handleAttendance = async (type: AttendanceAction) => {
+  useEffect(() => {
+    if (!cameraOpen) {
+      stopStream();
+      return;
+    }
+
+    const startStream = async () => {
+      try {
+        setCameraError(null);
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: false
+        });
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+      } catch (error) {
+        console.error("[camera]", error);
+        setCameraError("カメラの起動に失敗しました。権限を確認してください。");
+      }
+    };
+
+    startStream();
+
+    return () => {
+      stopStream();
+    };
+  }, [cameraOpen]);
+
+  const stopStream = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+  };
+
+  const handleAttendance = async (type: AttendanceAction, photoUrl?: string) => {
     if (!selectedCastId || selectedCastId === NO_SELECTION) {
       setStatusMessage("キャストを選択してください");
       return;
     }
     if (!store?.id) {
       setStatusMessage("店舗情報が取得できていません");
+      return;
+    }
+    if (type === "CLOCK_IN" && !photoUrl) {
+      setStatusMessage("出勤時の写真を撮影してください");
       return;
     }
     setIsSubmitting(true);
@@ -152,7 +201,8 @@ export function TerminalScreen() {
           storeId: store?.id,
           terminalId: null,
           type,
-          isCompanion: companionChecked
+          isCompanion: companionChecked,
+          photoUrl
         })
       });
       if (!res.ok) {
@@ -219,6 +269,65 @@ export function TerminalScreen() {
 
   // keep a stable reference for Select options so Radix doesn't re-render unexpectedly
   const selectableCasts = React.useMemo(() => casts, [casts]);
+
+  const openCameraForClockIn = () => {
+    if (!selectedCastId || selectedCastId === NO_SELECTION) {
+      setStatusMessage("キャストを選択してください");
+      return;
+    }
+    setCapturedDataUrl(null);
+    setCameraError(null);
+    setCameraOpen(true);
+  };
+
+  const capturePhoto = () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, width, height);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+    setCapturedDataUrl(dataUrl);
+    stopStream();
+  };
+
+  const closeCamera = () => {
+    stopStream();
+    setCapturedDataUrl(null);
+    setCameraOpen(false);
+  };
+
+  const submitClockInWithPhoto = async () => {
+    if (!capturedDataUrl) {
+      setStatusMessage("写真を撮影してください");
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const uploadRes = await fetch("/api/terminal/attendance-photo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageData: capturedDataUrl })
+      });
+      if (!uploadRes.ok) {
+        const body = await uploadRes.json();
+        throw new Error(body.error ?? "写真のアップロードに失敗しました");
+      }
+      const { url } = (await uploadRes.json()) as { url: string };
+      await handleAttendance("CLOCK_IN", url);
+      setCameraOpen(false);
+      setCapturedDataUrl(null);
+    } catch (error) {
+      setStatusMessage((error as Error).message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
     <div className="space-y-8">
@@ -287,9 +396,9 @@ export function TerminalScreen() {
             <Button
               className="h-16 text-lg"
               disabled={isSubmitting || selectedCastId === NO_SELECTION || !store?.id}
-              onClick={() => handleAttendance("CLOCK_IN")}
+              onClick={openCameraForClockIn}
             >
-              出勤
+              出勤（写真必須）
             </Button>
             <Button
               className="h-16 text-lg"
@@ -419,6 +528,50 @@ export function TerminalScreen() {
       {statusMessage ? (
         <div className="rounded-2xl border border-pink-500/40 bg-pink-500/10 p-4 text-center text-base text-pink-100">
           {statusMessage}
+        </div>
+      ) : null}
+
+      {cameraOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+          <div className="w-full max-w-md space-y-4 rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-pink-200">出勤用の写真を撮影</h3>
+              <Button variant="ghost" size="sm" onClick={closeCamera}>
+                閉じる
+              </Button>
+            </div>
+            <div className="aspect-video w-full overflow-hidden rounded-xl border border-slate-800 bg-black">
+              {capturedDataUrl ? (
+                <img src={capturedDataUrl} alt="撮影プレビュー" className="h-full w-full object-cover" />
+              ) : (
+                <video ref={videoRef} playsInline muted className="h-full w-full object-cover" />
+              )}
+              <canvas ref={canvasRef} className="hidden" />
+            </div>
+            {cameraError ? <p className="text-sm text-red-400">{cameraError}</p> : null}
+            <div className="flex flex-wrap gap-2">
+              {capturedDataUrl ? (
+                <>
+                  <Button onClick={submitClockInWithPhoto} disabled={isSubmitting}>
+                    この写真で出勤
+                  </Button>
+                  <Button variant="secondary" onClick={() => setCapturedDataUrl(null)} disabled={isSubmitting}>
+                    撮り直す
+                  </Button>
+                </>
+              ) : (
+                <Button onClick={capturePhoto} disabled={isSubmitting || Boolean(cameraError)}>
+                  撮影する
+                </Button>
+              )}
+              <Button variant="ghost" onClick={closeCamera} disabled={isSubmitting}>
+                キャンセル
+              </Button>
+            </div>
+            <p className="text-xs text-slate-400">
+              カメラが起動しない場合はブラウザの権限設定をご確認ください。iPhone ではインカメラが優先されます。
+            </p>
+          </div>
         </div>
       ) : null}
     </div>

@@ -46,6 +46,7 @@ model User {
   rides        Ride[]          @relation("DriverRides")
   approvedDays AttendanceApproval[] @relation("AttendanceApprovalApprovedBy")
   approvedAttendances Attendance[] @relation("AttendanceApprovedBy")
+  attendancePhotos AttendancePhoto[]
 }
 
 model Store {
@@ -64,6 +65,7 @@ model Store {
   rides       Ride[]
   terminals   Terminal[]
   attendanceApprovals AttendanceApproval[]
+  attendancePhotos AttendancePhoto[]
 }
 
 model Attendance {
@@ -76,9 +78,24 @@ model Attendance {
   approvedAt DateTime?
   approvedById String?
 
+  photo AttendancePhoto?
+
   user  User  @relation(fields: [userId], references: [id])
   store Store @relation(fields: [storeId], references: [id])
   approvedBy User? @relation("AttendanceApprovedBy", fields: [approvedById], references: [id])
+}
+
+model AttendancePhoto {
+  id            String   @id @default(cuid())
+  attendanceId  String   @unique
+  storeId       String
+  staffId       String
+  photoUrl      String
+  createdAt     DateTime @default(now())
+
+  attendance Attendance @relation(fields: [attendanceId], references: [id])
+  store       Store      @relation(fields: [storeId], references: [id])
+  staff       User       @relation(fields: [staffId], references: [id])
 }
 
 model AttendanceApproval {
