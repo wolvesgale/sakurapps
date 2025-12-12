@@ -3,74 +3,68 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { verifyTerminalAccess } from "@/lib/terminal";
+import { getOrCreateDefaultStore } from "@/lib/store";
 
-const saleCategories = ["SET", "DRINK", "BOTTLE", "OTHER"] as const;
+const paymentMethods = ["CASH", "PAYPAY", "CARD"] as const;
 
-type SaleCategory = (typeof saleCategories)[number];
+type PaymentMethod = (typeof paymentMethods)[number];
 
 export async function POST(request: Request) {
   try {
-    const { userId, storeId, tableNumber, category, amount, terminalId } =
+    const { staffId, storeId, paymentMethod, amount, terminalId } =
       (await request.json()) as {
-        userId?: string;
+        staffId?: string;
         storeId?: string;
-        tableNumber?: string;
-        category?: SaleCategory;
+        paymentMethod?: PaymentMethod;
         amount?: number;
         terminalId?: string;
       };
 
     if (
-      !userId ||
-      !category ||
-      !saleCategories.includes(category) ||
+      !staffId ||
+      !paymentMethod ||
+      !paymentMethods.includes(paymentMethod) ||
       typeof amount !== "number" ||
-      !storeId ||
-      !terminalId
+      Number.isNaN(amount)
     ) {
       return NextResponse.json({ error: "Invalid request" }, { status: 400 });
     }
 
-    const terminal = await verifyTerminalAccess(storeId, terminalId);
+    const defaultStore = await getOrCreateDefaultStore();
+    const targetStoreId = storeId ?? defaultStore.id;
+
+    const terminal = await verifyTerminalAccess(targetStoreId, terminalId);
 
     if (!terminal) {
       return NextResponse.json({ error: "Unauthorized terminal" }, { status: 403 });
     }
 
-    const cast = await prisma.user.findFirst({
+    const staff = await prisma.user.findFirst({
       where: {
-        id: userId,
-        role: "CAST",
-        isActive: true,
-        ...(storeId ? { storeId } : {})
+        id: staffId,
+        role: { in: ["CAST", "DRIVER"] },
+        isActive: true
       }
     });
 
-    if (!cast) {
-      return NextResponse.json({ error: "Cast not found" }, { status: 404 });
-    }
-
-    if (storeId && cast.storeId && cast.storeId !== storeId) {
-      return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
-    }
-
-    const targetStoreId = storeId ?? cast.storeId;
-
-    if (!targetStoreId) {
-      return NextResponse.json({ error: "Store not found" }, { status: 400 });
+    if (!staff) {
+      return NextResponse.json({ error: "Staff not found" }, { status: 404 });
     }
 
     if (terminal.storeId !== targetStoreId) {
       return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
     }
 
+    if (staff.storeId && staff.storeId !== targetStoreId) {
+      return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
+    }
+
     const sale = await prisma.sale.create({
       data: {
-        userId: cast.id,
+        staffId: staff.id,
         storeId: targetStoreId,
-        tableNumber: tableNumber ?? "",
-        category,
-        amount
+        paymentMethod,
+        amount: Math.trunc(amount)
       }
     });
 
