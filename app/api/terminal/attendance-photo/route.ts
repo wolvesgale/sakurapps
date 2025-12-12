@@ -35,7 +35,7 @@ export async function POST(req: Request) {
 
     if (!process.env.BLOB_READ_WRITE_TOKEN) {
       console.error("[attendance-photo upload] missing BLOB_READ_WRITE_TOKEN");
-      return NextResponse.json({ error: "画像ストレージの設定が不足しています" }, { status: 500 });
+      return NextResponse.json({ error: "画像ストレージの設定が不足しています" }, { status: 400 });
     }
 
     const fileName = `attendance/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;

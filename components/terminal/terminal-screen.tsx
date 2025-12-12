@@ -137,26 +137,6 @@ export function TerminalScreen() {
       }
     }, 15000);
 
-    const startStream = async () => {
-      try {
-        setCameraError(null);
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user" },
-          audio: false
-        });
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-      } catch (error) {
-        console.error("[camera]", error);
-        setCameraError("カメラの起動に失敗しました。権限を確認してください。");
-      }
-    };
-
-    startStream();
-
     return () => {
       if (interval) clearInterval(interval);
     };

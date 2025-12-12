@@ -38,6 +38,7 @@ const TZ = "Asia/Tokyo";
 const toJst = (date: Date) => new Date(date.toLocaleString("en-US", { timeZone: TZ }));
 
 type AttendanceRecord = Prisma.AttendanceGetPayload<{ include: { user: true; approvedBy: true; photo: true } }>;
+type AttendanceApprovalRecord = Prisma.AttendanceApprovalGetPayload<Record<string, never>>;
 
 type AttendancePageProps = {
   searchParams?: {
@@ -102,6 +103,36 @@ function buildDaySummary(records: AttendanceRecord[]): DaySummary {
   }
 
   return { clockInJst: clockInEvent?.jst ?? null, clockOutJst: clockOutEvent?.jst ?? null, workingMinutes };
+}
+
+async function safeFetchAttendances(params: Prisma.AttendanceFindManyArgs): Promise<AttendanceRecord[]> {
+  try {
+    return (await prisma.attendance.findMany(params)) as AttendanceRecord[];
+  } catch (error) {
+    console.error("[attendance] primary fetch failed, retrying without photo include", error);
+    const fallbackParams: Prisma.AttendanceFindManyArgs = { ...params };
+    // omit photo include when schema/table is unavailable
+    if (fallbackParams.include) {
+      const restInclude = { ...(fallbackParams.include as Record<string, unknown>) };
+      delete (restInclude as Record<string, unknown>).photo;
+      fallbackParams.include = restInclude as Prisma.AttendanceFindManyArgs["include"];
+    }
+    try {
+      return (await prisma.attendance.findMany(fallbackParams)) as AttendanceRecord[];
+    } catch (secondaryError) {
+      console.error("[attendance] fallback fetch failed", secondaryError);
+      return [] as AttendanceRecord[];
+    }
+  }
+}
+
+async function safeFetchApprovals(params: Prisma.AttendanceApprovalFindManyArgs) {
+  try {
+    return await prisma.attendanceApproval.findMany(params);
+  } catch (error) {
+    console.error("[attendance] approval fetch failed", error);
+    return [] as AttendanceApprovalRecord[];
+  }
 }
 
 async function deleteAttendance(formData: FormData) {
@@ -228,7 +259,7 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
         ? staffFilterParam
         : undefined;
 
-    const attendances = await prisma.attendance.findMany({
+    const attendances = await safeFetchAttendances({
       where: {
         storeId: activeStoreId,
         timestamp: { gte: monthStart, lt: addDays(monthEnd, 1) },
@@ -238,7 +269,7 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
       orderBy: { timestamp: "asc" }
     });
 
-    const approvals = await prisma.attendanceApproval.findMany({
+    const approvals = await safeFetchApprovals({
       where: {
         storeId: activeStoreId,
         date: { gte: startOfDay(monthStart), lt: addDays(monthEnd, 1) }
