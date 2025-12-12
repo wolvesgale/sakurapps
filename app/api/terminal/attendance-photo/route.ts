@@ -1,4 +1,5 @@
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { put } from "@vercel/blob";
@@ -41,7 +42,7 @@ async function readMultipartImageBuffer(req: Request): Promise<Buffer | null> {
 
 export async function POST(req: Request) {
   try {
-    const token = process.env.BLOB_READ_WRITE_TOKEN;
+    const token = process.env.BLOB_READ_WRITE_TOKEN?.trim();
     if (!token) {
       console.error("[attendance-photo upload] missing BLOB_READ_WRITE_TOKEN");
       return NextResponse.json({ error: "画像ストレージの設定が不足しています" }, { status: 400 });
