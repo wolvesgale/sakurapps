@@ -21,11 +21,10 @@ enum AttendanceType {
   BREAK_END
 }
 
-enum SaleCategory {
-  SET
-  DRINK
-  BOTTLE
-  OTHER
+enum PaymentMethod {
+  CASH
+  PAYPAY
+  CARD
 }
 
 model User {
@@ -43,9 +42,11 @@ model User {
   updatedAt    DateTime        @updatedAt
 
   attendances  Attendance[]
-  sales        Sale[]
+  sales        Sale[]        @relation("UserSales")
   rides        Ride[]          @relation("DriverRides")
   approvedDays AttendanceApproval[] @relation("AttendanceApprovalApprovedBy")
+  approvedAttendances Attendance[] @relation("AttendanceApprovedBy")
+  attendancePhotos AttendancePhoto[]
 }
 
 model Store {
@@ -64,6 +65,7 @@ model Store {
   rides       Ride[]
   terminals   Terminal[]
   attendanceApprovals AttendanceApproval[]
+  attendancePhotos AttendancePhoto[]
 }
 
 model Attendance {
@@ -72,9 +74,28 @@ model Attendance {
   storeId   String
   type      AttendanceType
   timestamp DateTime        @default(now())
+  isCompanion Boolean       @default(false)
+  approvedAt DateTime?
+  approvedById String?
+
+  photo AttendancePhoto?
 
   user  User  @relation(fields: [userId], references: [id])
   store Store @relation(fields: [storeId], references: [id])
+  approvedBy User? @relation("AttendanceApprovedBy", fields: [approvedById], references: [id])
+}
+
+model AttendancePhoto {
+  id            String   @id @default(cuid())
+  attendanceId  String   @unique
+  storeId       String
+  staffId       String
+  photoUrl      String
+  createdAt     DateTime @default(now())
+
+  attendance Attendance @relation(fields: [attendanceId], references: [id])
+  store       Store      @relation(fields: [storeId], references: [id])
+  staff       User       @relation(fields: [staffId], references: [id])
 }
 
 model AttendanceApproval {
@@ -92,15 +113,14 @@ model AttendanceApproval {
 }
 
 model Sale {
-  id          String       @id @default(cuid())
-  userId      String
-  storeId     String
-  tableNumber String
-  category    SaleCategory
-  amount      Int
-  createdAt   DateTime     @default(now())
+  id            String         @id @default(cuid())
+  staffId       String
+  storeId       String
+  paymentMethod PaymentMethod
+  amount        Int
+  createdAt     DateTime       @default(now())
 
-  user  User  @relation(fields: [userId], references: [id])
+  staff User  @relation("UserSales", fields: [staffId], references: [id])
   store Store @relation(fields: [storeId], references: [id])
 }
 
