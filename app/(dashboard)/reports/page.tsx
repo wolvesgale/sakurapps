@@ -4,6 +4,7 @@ import { ja } from "date-fns/locale";
 import { format } from "date-fns";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
+import { getOrCreateDefaultStore } from "@/lib/store";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,78 +28,85 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
     redirect("/dashboard");
   }
 
-  const stores = await prisma.store.findMany({ orderBy: { name: "asc" } });
+  const defaultStore = await getOrCreateDefaultStore();
+  const rawDate = searchParams?.date;
+  const parsedDate = rawDate && !Number.isNaN(Date.parse(rawDate)) ? new Date(rawDate) : new Date();
 
-  const dateParam = searchParams?.date ?? formatISO(new Date(), { representation: "date" });
-  const selectedDate = new Date(dateParam);
-  const start = startOfDay(selectedDate);
-  const end = addDays(start, 1);
-  const monthStart = startOfMonth(selectedDate);
-  const monthEnd = endOfMonth(selectedDate);
+  try {
+    const stores = await prisma.store.findMany({ orderBy: { name: "asc" } });
 
-  const selectedStoreId =
-    session.user.role === "ADMIN" ? session.user.storeId ?? undefined : searchParams?.storeId;
+    const selectedDate = startOfDay(parsedDate);
+    const start = selectedDate;
+    const end = addDays(start, 1);
+    const monthStart = startOfMonth(selectedDate);
+    const monthEnd = endOfMonth(selectedDate);
 
-  const casts = await prisma.user.findMany({
-    where: {
-      role: "CAST",
-      isActive: true,
-      ...(selectedStoreId ? { storeId: selectedStoreId } : {}),
-      ...(session.user.role === "ADMIN" && session.user.storeId
-        ? { storeId: session.user.storeId }
-        : {})
-    },
-    orderBy: { displayName: "asc" }
-  });
+    const storeParam = searchParams?.storeId;
+    const selectedStoreId =
+      session.user.role === "ADMIN"
+        ? session.user.storeId ?? undefined
+        : storeParam && storeParam !== "__all__"
+          ? storeParam
+          : undefined;
 
-  const selectedCastId = searchParams?.castId && casts.some((c) => c.id === searchParams.castId)
-    ? searchParams.castId
-    : undefined;
-
-  const [attendances, sales, monthlyAttendances] = await Promise.all([
-    prisma.attendance.findMany({
+    const casts = await prisma.user.findMany({
       where: {
-        timestamp: { gte: start, lt: end },
-        ...(selectedStoreId ? { storeId: selectedStoreId } : {}),
-        ...(selectedCastId ? { userId: selectedCastId } : {})
+        role: "CAST",
+        isActive: true,
+        storeId: selectedStoreId ?? defaultStore.id
       },
-      include: { user: true, store: true },
-      orderBy: { timestamp: "desc" }
-    }),
-    prisma.sale.findMany({
-      where: {
-        createdAt: { gte: start, lt: end },
-        ...(selectedStoreId ? { storeId: selectedStoreId } : {}),
-        ...(selectedCastId ? { userId: selectedCastId } : {})
-      },
-      include: { user: true, store: true },
-      orderBy: { createdAt: "desc" }
-    }),
-    prisma.attendance.findMany({
-      where: {
-        timestamp: { gte: monthStart, lt: addDays(monthEnd, 1) },
-        ...(selectedStoreId ? { storeId: selectedStoreId } : {}),
-        ...(selectedCastId ? { userId: selectedCastId } : {})
-      },
-      include: { user: true, store: true },
-      orderBy: { timestamp: "asc" }
-    })
-  ]);
+      orderBy: { displayName: "asc" }
+    });
 
-  const salesTotal = sales.reduce((sum, sale) => sum + sale.amount, 0);
-  const calendarDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
-  const attendanceByDate = monthlyAttendances.reduce<Record<string, typeof monthlyAttendances[number][]>>(
-    (acc, record) => {
-      const key = format(record.timestamp, "yyyy-MM-dd");
-      acc[key] = acc[key] ? [...acc[key], record] : [record];
-      return acc;
-    },
-    {}
-  );
+    const castParam = searchParams?.castId;
+    const selectedCastId =
+      castParam && castParam !== "__all__" && casts.some((c) => c.id === castParam) ? castParam : undefined;
 
-  return (
-    <div className="space-y-8">
-      <h1 className="text-2xl font-semibold text-pink-300">レポート</h1>
+    const [attendances, sales, monthlyAttendances] = await Promise.all([
+      prisma.attendance.findMany({
+        where: {
+          timestamp: { gte: start, lt: end },
+          storeId: selectedStoreId ?? defaultStore.id,
+          ...(selectedCastId ? { userId: selectedCastId } : {})
+        },
+        include: { user: true, store: true },
+        orderBy: { timestamp: "desc" }
+      }),
+      prisma.sale.findMany({
+        where: {
+          createdAt: { gte: start, lt: end },
+          ...(selectedStoreId ? { storeId: selectedStoreId } : {}),
+          ...(selectedCastId ? { staffId: selectedCastId } : {}),
+          storeId: selectedStoreId ?? defaultStore.id
+        },
+        include: { staff: true, store: true },
+        orderBy: { createdAt: "desc" }
+      }),
+      prisma.attendance.findMany({
+        where: {
+          timestamp: { gte: monthStart, lt: addDays(monthEnd, 1) },
+          storeId: selectedStoreId ?? defaultStore.id,
+          ...(selectedCastId ? { userId: selectedCastId } : {})
+        },
+        include: { user: true, store: true },
+        orderBy: { timestamp: "asc" }
+      })
+    ]);
+
+    const salesTotal = sales.reduce((sum, sale) => sum + sale.amount, 0);
+    const calendarDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
+    const attendanceByDate = monthlyAttendances.reduce<Record<string, typeof monthlyAttendances[number][]>>(
+      (acc, record) => {
+        const key = format(record.timestamp, "yyyy-MM-dd");
+        acc[key] = acc[key] ? [...acc[key], record] : [record];
+        return acc;
+      },
+      {}
+    );
+
+    return (
+      <div className="space-y-8">
+        <h1 className="text-2xl font-semibold text-pink-300">レポート</h1>
       <Card>
         <CardHeader>
           <CardTitle>フィルター</CardTitle>
@@ -111,12 +119,12 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
             </div>
             <div className="space-y-2">
               <Label>店舗</Label>
-              <Select name="storeId" defaultValue={selectedStoreId ?? ""}>
+              <Select name="storeId" defaultValue={selectedStoreId ?? "__all__"}>
                 <SelectTrigger>
                   <SelectValue placeholder="全店舗" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">全店舗</SelectItem>
+                  <SelectItem value="__all__">全店舗</SelectItem>
                   {stores
                     .filter((store) =>
                       session.user.role === "ADMIN"
@@ -133,12 +141,12 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
             </div>
             <div className="space-y-2">
               <Label>キャスト</Label>
-              <Select name="castId" defaultValue={selectedCastId ?? ""}>
+              <Select name="castId" defaultValue={selectedCastId ?? "__all__"}>
                 <SelectTrigger>
                   <SelectValue placeholder="全キャスト" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">全キャスト</SelectItem>
+                  <SelectItem value="__all__">全キャスト</SelectItem>
                   {casts.map((cast) => (
                     <SelectItem key={cast.id} value={cast.id}>
                       {cast.displayName}
@@ -186,13 +194,12 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
               <ul className="space-y-2 text-sm">
                 {sales.map((sale) => (
                   <li key={sale.id} className="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
-                    <p className="font-semibold text-pink-200">{sale.user.displayName}</p>
+                    <p className="font-semibold text-pink-200">{sale.staff?.displayName ?? "キャスト不明"}</p>
                     <p className="text-xs text-slate-400">{sale.store?.name ?? "店舗不明"}</p>
                     <p className="text-xs text-slate-500">
-                      {format(sale.createdAt, "PPPp", { locale: ja })} / 区分: {sale.category}
+                      {format(sale.createdAt, "PPPp", { locale: ja })} / 支払方法: {sale.paymentMethod}
                     </p>
                     <p className="text-sm text-slate-200">金額: {formatCurrency(sale.amount)}</p>
-                    <p className="text-xs text-slate-500">卓番: {sale.tableNumber || "-"}</p>
                   </li>
                 ))}
               </ul>
@@ -243,6 +250,14 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
           </div>
         </CardContent>
       </Card>
-    </div>
-  );
+      </div>
+    );
+  } catch (error) {
+    console.error("[reports-page] render", error);
+    return (
+      <div className="rounded-lg border border-red-900/40 bg-red-950/30 p-6 text-sm text-red-100">
+        レポートデータの読み込みに失敗しました。時間をおいて再度お試しください。
+      </div>
+    );
+  }
 }
