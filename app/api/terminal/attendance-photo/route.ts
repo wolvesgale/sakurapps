@@ -21,6 +21,24 @@ async function readJsonImageBuffer(req: Request): Promise<Buffer | null> {
   }
 }
 
+async function readMultipartImageBuffer(req: Request): Promise<Buffer | null> {
+  const contentType = req.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().startsWith("multipart/form-data")) return null;
+
+  const form = await req.formData().catch(() => null);
+  if (!form) return null;
+
+  const file = form.get("file");
+  if (!file || typeof file === "string") return null;
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const token = process.env.BLOB_READ_WRITE_TOKEN;
@@ -29,7 +47,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "画像ストレージの設定が不足しています" }, { status: 400 });
     }
 
-    const buffer = await readJsonImageBuffer(req);
+    const buffer = (await readJsonImageBuffer(req)) ?? (await readMultipartImageBuffer(req));
     if (!buffer || buffer.length === 0) {
       return NextResponse.json({ error: "画像データがありません" }, { status: 400 });
     }

@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { verifyTerminalAccess } from "@/lib/terminal";
 import { getOrCreateDefaultStore } from "@/lib/store";
@@ -111,7 +112,20 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ attendance });
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Internal server error";
+    const isSchemaMissing =
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      (error.code === "P2021" || error.code === "P2022");
+
+    if (isSchemaMissing) {
+      console.error("[terminal-attendance] attendancePhoto table missing", error);
+      return NextResponse.json(
+        { error: "出勤写真の保存に失敗しました。最新のマイグレーションを適用してください。" },
+        { status: 500 }
+      );
+    }
+
     console.error("[terminal-attendance] POST", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

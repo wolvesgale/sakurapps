@@ -32,6 +32,7 @@ Next.js 14 (App Router) + Prisma + NextAuth で構築した、ガールズバー
    - `SEED_OWNER_PASSWORD`: シード実行時に作成するオーナーのパスワード
    - `SEED_OWNER_DISPLAY_NAME`: シード実行時に作成するオーナーの表示名 (任意)
    - `BLOB_READ_WRITE_TOKEN`: 出勤写真を Vercel Blob に保存するためのトークン（未設定の場合、写真アップロード API は 400 を返し端末側にエラーを表示します）
+     - Vercel の「Storage > Blob」で Read/Write トークンを発行し、Production/Preview/Development すべての環境変数に設定してください。デプロイや再起動後に `/terminal` から撮影→アップロードすると 200 と URL が返ります。
 
 3. Prisma クライアントを生成し、マイグレーションを実行します。
 
