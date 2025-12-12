@@ -292,12 +292,14 @@ export function TerminalScreen() {
     if (!video || !canvas) return;
     const width = video.videoWidth;
     const height = video.videoHeight;
-    canvas.width = width;
-    canvas.height = height;
+    const targetWidth = Math.min(1280, Math.max(640, width));
+    const targetHeight = Math.round((height / width) * targetWidth);
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.drawImage(video, 0, 0, width, height);
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+    ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
     setCapturedDataUrl(dataUrl);
     stopStream();
   };
