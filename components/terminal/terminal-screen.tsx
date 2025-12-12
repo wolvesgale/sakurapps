@@ -63,6 +63,7 @@ export function TerminalScreen() {
   const [capturedDataUrl, setCapturedDataUrl] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
@@ -111,27 +112,29 @@ export function TerminalScreen() {
     fetchStore();
   }, []);
 
+  const fetchActiveStaff = async (storeId: string) => {
+    try {
+      const response = await fetch(`/api/terminal/active-staff?storeId=${storeId}`);
+      if (!response.ok) {
+        throw new Error("出勤中メンバーの取得に失敗しました");
+      }
+      const body = (await response.json()) as { activeStaff?: ActiveStaff[] };
+      setActiveStaff(body.activeStaff ?? []);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
   useEffect(() => {
     if (!store?.id) return;
 
     let interval: ReturnType<typeof setInterval> | null = null;
 
-    const fetchActive = async () => {
-      try {
-        const response = await fetch(`/api/terminal/active-staff?storeId=${store.id}`);
-        if (!response.ok) {
-          throw new Error("出勤中メンバーの取得に失敗しました");
-        }
-        const body = (await response.json()) as { activeStaff?: ActiveStaff[] };
-        setActiveStaff(body.activeStaff ?? []);
-      } catch (error) {
-        console.error(error);
-      }
-    };
-
-    fetchActive();
+    fetchActiveStaff(store.id);
     interval = setInterval(() => {
-      fetchActive();
+      if (store.id) {
+        fetchActiveStaff(store.id);
+      }
     }, 15000);
 
     return () => {
@@ -177,6 +180,34 @@ export function TerminalScreen() {
     }
   };
 
+  const handleFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const reader = new FileReader();
+
+      const dataUrl: string = await new Promise((resolve, reject) => {
+        reader.onload = () => {
+          if (typeof reader.result === "string") {
+            resolve(reader.result);
+          } else {
+            reject(new Error("画像の読み込みに失敗しました"));
+          }
+        };
+        reader.onerror = () => reject(new Error("画像の読み込みに失敗しました"));
+        reader.readAsDataURL(file);
+      });
+
+      setCapturedDataUrl(dataUrl);
+      stopStream();
+      setCameraError(null);
+    } catch (error) {
+      console.error("[file-upload]", error);
+      setStatusMessage("画像の読み込みに失敗しました。別の画像を選択してください。");
+    }
+  };
+
   const handleAttendance = async (type: AttendanceAction, photoUrl?: string) => {
     if (!selectedCastId || selectedCastId === NO_SELECTION) {
       setStatusMessage("キャストを選択してください");
@@ -211,6 +242,9 @@ export function TerminalScreen() {
       }
       setStatusMessage("勤怠を登録しました");
       setCompanionChecked(false);
+      if (store?.id) {
+        fetchActiveStaff(store.id);
+      }
     } catch (err) {
       setStatusMessage((err as Error).message);
     } finally {
@@ -550,6 +584,17 @@ export function TerminalScreen() {
             </div>
             {cameraError ? <p className="text-sm text-red-400">{cameraError}</p> : null}
             <div className="flex flex-wrap gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                capture="user"
+                className="hidden"
+                onChange={handleFileSelected}
+              />
+              <Button onClick={() => fileInputRef.current?.click()} disabled={isSubmitting}>
+                カメラで撮影/選択
+              </Button>
               {capturedDataUrl ? (
                 <>
                   <Button onClick={submitClockInWithPhoto} disabled={isSubmitting}>
@@ -561,7 +606,7 @@ export function TerminalScreen() {
                 </>
               ) : (
                 <Button onClick={capturePhoto} disabled={isSubmitting || Boolean(cameraError)}>
-                  撮影する
+                  ライブカメラで撮影
                 </Button>
               )}
               <Button variant="ghost" onClick={closeCamera} disabled={isSubmitting}>
@@ -569,7 +614,8 @@ export function TerminalScreen() {
               </Button>
             </div>
             <p className="text-xs text-slate-400">
-              カメラが起動しない場合はブラウザの権限設定をご確認ください。iPhone ではインカメラが優先されます。
+              iPhone Safari では「カメラで撮影/選択」ボタンからインカメラが起動します。権限を許可できない場合は
+              写真が取得できず出勤登録できません。
             </p>
           </div>
         </div>
