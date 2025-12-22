@@ -2,13 +2,51 @@
 import { prisma } from "./prisma";
 import { getOrCreateDefaultStore } from "./store";
 
+function getJstParts(date: Date) {
+  const dtf = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  });
+
+  const parts = dtf.formatToParts(date);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? "0");
+
+  return {
+    year: get("year"),
+    month: get("month"),
+    day: get("day"),
+    hour: get("hour"),
+    minute: get("minute"),
+    second: get("second")
+  };
+}
+
+// JSTで指定した日時を「UTCのDate」に変換（JST=UTC+9）
+function utcDateFromJst(
+  y: number,
+  m: number,
+  d: number,
+  hh: number,
+  mm: number,
+  ss = 0,
+  ms = 0
+) {
+  return new Date(Date.UTC(y, m - 1, d, hh - 9, mm, ss, ms));
+}
+
 /**
- * 営業日定義:
+ * 営業日定義（JST固定）:
  * - 基本: 18:00〜翌06:00 を 1営業日として扱う
- * - 猶予: 06:00直後のズレを前営業日に寄せたい場合のために graceMinutes を用意
- *   例: graceMinutes=120 なら 06:00〜07:59 は前営業日扱い
+ * - graceMinutes: 06:00直後のズレを前営業日に寄せる猶予
+ *   例: 120 なら 06:00〜07:59 は前営業日扱い
  */
-function getBusinessDayRange(
+function getBusinessDayRangeJst(
   now: Date,
   {
     startHour = 18,
@@ -16,47 +54,37 @@ function getBusinessDayRange(
     graceMinutes = 120
   }: { startHour?: number; endHour?: number; graceMinutes?: number } = {}
 ) {
-  const y = now.getFullYear();
-  const m = now.getMonth();
-  const d = now.getDate();
+  const j = getJstParts(now);
 
-  const todayStart = new Date(y, m, d, startHour, 0, 0, 0); // 今日18:00
-  const todayEnd = new Date(y, m, d, endHour, 0, 0, 0);     // 今日06:00
+  // 今日の06:00(JST) と 18:00(JST)
+  const todayEndJst = utcDateFromJst(j.year, j.month, j.day, endHour, 0, 0, 0);
+  const todayStartJst = utcDateFromJst(j.year, j.month, j.day, startHour, 0, 0, 0);
 
-  // 「今日06:00」の grace 期限 = 今日06:00 + graceMinutes
-  const endWithGrace = new Date(todayEnd.getTime() + graceMinutes * 60 * 1000);
+  // 現在時刻（UTC Date）をそのまま比較してOK（todayEndJst/todayStartJstはUTCに直してあるため）
+  const endWithGrace = new Date(todayEndJst.getTime() + graceMinutes * 60 * 1000);
 
-  // ケース分け
-  // A) 06:00〜(06:00+grace) は “前営業日”に寄せる
-  // B) 18:00以降は “当営業日(今日18:00〜明日06:00)”
-  // C) それ以外（08:00〜17:59など）は “前営業日(昨日18:00〜今日06:00)” を表示
   let from: Date;
   let to: Date;
 
   if (now < endWithGrace) {
-    // 前営業日: 昨日18:00〜今日06:00
-    from = new Date(y, m, d - 1, startHour, 0, 0, 0);
-    to = new Date(y, m, d, endHour, 0, 0, 0);
-  } else if (now >= todayStart) {
-    // 当営業日: 今日18:00〜明日06:00
-    from = new Date(y, m, d, startHour, 0, 0, 0);
-    to = new Date(y, m, d + 1, endHour, 0, 0, 0);
+    // 前営業日: 昨日18:00〜今日06:00（JST）
+    from = utcDateFromJst(j.year, j.month, j.day - 1, startHour, 0, 0, 0);
+    to = utcDateFromJst(j.year, j.month, j.day, endHour, 0, 0, 0);
+  } else if (now >= todayStartJst) {
+    // 当営業日: 今日18:00〜明日06:00（JST）
+    from = utcDateFromJst(j.year, j.month, j.day, startHour, 0, 0, 0);
+    to = utcDateFromJst(j.year, j.month, j.day + 1, endHour, 0, 0, 0);
   } else {
-    // 日中帯: 前営業日（昨日18:00〜今日06:00）
-    from = new Date(y, m, d - 1, startHour, 0, 0, 0);
-    to = new Date(y, m, d, endHour, 0, 0, 0);
+    // 日中帯は前営業日を表示
+    from = utcDateFromJst(j.year, j.month, j.day - 1, startHour, 0, 0, 0);
+    to = utcDateFromJst(j.year, j.month, j.day, endHour, 0, 0, 0);
   }
 
   return { from, to };
 }
 
-export async function verifyTerminalAccess(
-  storeId?: string | null,
-  deviceId?: string | null
-) {
-  // Development fallback: bypass terminal verification but always scope to the default store
+export async function verifyTerminalAccess(storeId?: string | null, deviceId?: string | null) {
   const defaultStore = await getOrCreateDefaultStore();
-
   return {
     id: deviceId ?? "dev-terminal",
     deviceId: deviceId ?? "dev-device",
@@ -66,10 +94,10 @@ export async function verifyTerminalAccess(
 }
 
 export async function getActiveStaffForToday(storeId: string) {
-  const { from, to } = getBusinessDayRange(new Date(), {
+  const { from, to } = getBusinessDayRangeJst(new Date(), {
     startHour: 18,
     endHour: 6,
-    graceMinutes: 120 // 必要なら 0 / 60 / 180 などに調整
+    graceMinutes: 120
   });
 
   const attendances = await prisma.attendance.findMany({
@@ -83,47 +111,31 @@ export async function getActiveStaffForToday(storeId: string) {
 
   const activeMap = new Map<
     string,
-    {
-      userId: string;
-      displayName: string;
-      firstClockIn: Date | null;
-      lastType: string | null;
-      isCompanion: boolean;
-    }
+    { userId: string; displayName: string; firstClockIn: Date | null; lastType: string | null; isCompanion: boolean }
   >();
 
-  for (const attendance of attendances) {
-    const current = activeMap.get(attendance.userId) ?? {
-      userId: attendance.userId,
-      displayName: attendance.user.displayName,
+  for (const a of attendances) {
+    const current = activeMap.get(a.userId) ?? {
+      userId: a.userId,
+      displayName: a.user.displayName,
       firstClockIn: null,
       lastType: null,
       isCompanion: false
     };
 
-    // 最初の CLOCK_IN を「出勤開始」として保持
-    if (attendance.type === "CLOCK_IN" && !current.firstClockIn) {
-      current.firstClockIn = attendance.timestamp;
-    }
+    if (a.type === "CLOCK_IN" && !current.firstClockIn) current.firstClockIn = a.timestamp;
+    if (a.type === "CLOCK_IN") current.isCompanion = Boolean(a.isCompanion);
 
-    // 同伴フラグは「最後に押された CLOCK_IN の値」を採用（後から押し直しがあっても反映できる）
-    if (attendance.type === "CLOCK_IN") {
-      current.isCompanion = Boolean(attendance.isCompanion);
-    }
-
-    current.lastType = attendance.type;
-    activeMap.set(attendance.userId, current);
+    current.lastType = a.type;
+    activeMap.set(a.userId, current);
   }
 
-  // 出勤中判定:
-  // - 最後が CLOCK_OUT なら退勤済みなので除外
-  // - BREAK_START / BREAK_END は出勤中扱い（休憩中を別表示したければ拡張可能）
   return Array.from(activeMap.values())
-    .filter((record) => record.lastType && record.lastType !== "CLOCK_OUT")
-    .map((record) => ({
-      id: record.userId,
-      displayName: record.displayName,
-      clockInAt: record.firstClockIn,
-      isCompanion: record.isCompanion
+    .filter((r) => r.lastType && r.lastType !== "CLOCK_OUT")
+    .map((r) => ({
+      id: r.userId,
+      displayName: r.displayName,
+      clockInAt: r.firstClockIn,
+      isCompanion: r.isCompanion
     }));
 }
