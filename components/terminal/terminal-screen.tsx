@@ -41,7 +41,7 @@ type PaymentMethod = "CASH" | "PAYPAY" | "CARD";
 
 const FALLBACK_STORE_NAME = "Nest SAKURA";
 const NO_SELECTION = "__none__";
-const SHOW_ACTIVE_STAFF = false; // 将来復活させる場合は true に戻す
+const SHOW_ACTIVE_STAFF = true; // 将来復活させる場合は true に戻す
 
 export function TerminalScreen() {
   const [store, setStore] = useState<StoreInfo | null>(null);
