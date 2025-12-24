@@ -46,7 +46,7 @@ function utcDateFromJst(
  * - graceMinutes: 06:00直後のズレを前営業日に寄せる猶予
  *   例: 120 なら 06:00〜07:59 は前営業日扱い
  */
-function getBusinessDayRangeJst(
+export function getBusinessDayRangeJst(
   now: Date,
   {
     startHour = 18,
