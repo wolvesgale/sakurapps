@@ -2,6 +2,8 @@
 import type { Attendance } from "@prisma/client";
 import { prisma } from "./prisma";
 import { getOrCreateDefaultStore } from "./store";
+// Import necessary date utility functions from date-fns
+import { addDays, startOfMonth, endOfMonth } from "date-fns";
 
 /**
  * JSTパーツを取り出す
@@ -94,10 +96,7 @@ export function getBusinessDayRangeJst(
  */
 export function getBusinessDayRangeFromCalendarDateJst(
   dateInput: Date,
-  {
-    startHour = 18,
-    endHour = 6
-  }: { startHour?: number; endHour?: number } = {}
+  { startHour = 18, endHour = 6 }: { startHour?: number; endHour?: number } = {}
 ) {
   const j = getJstParts(dateInput);
   const from = utcDateFromJst(j.year, j.month, j.day, startHour, 0, 0, 0);
@@ -119,7 +118,8 @@ export function getBusinessDayKeyJst(
     graceMinutes = 120
   }: { startHour?: number; endHour?: number; graceMinutes?: number } = {}
 ) {
-  const { from, to } = getBusinessDayRangeJst(timestamp, { startHour, endHour, graceMinutes });
+  // NOTE: `to` is not needed here; keep only `from` to satisfy no-unused-vars.
+  const { from } = getBusinessDayRangeJst(timestamp, { startHour, endHour, graceMinutes });
   // 営業日の "from" に対応する JST日付をキーにする
   const parts = getJstParts(from);
   return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
