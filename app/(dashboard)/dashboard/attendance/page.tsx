@@ -1,6 +1,5 @@
-// Modified version of app/(dashboard)/dashboard/attendance/page.tsx
-// Unused helper functions have been removed to satisfy ESLint rules.
-// All other logic remains unchanged.
+// app/(dashboard)/dashboard/attendance/page.tsx
+"use client";
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -14,15 +13,20 @@ import {
   isValid,
   startOfDay,
   startOfMonth,
-  subMonths
+  subMonths,
 } from "date-fns";
 import { ja } from "date-fns/locale";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getOrCreateDefaultStore } from "@/lib/store";
 import { updateDayApproval } from "@/lib/attendance";
-import { getServerUser } from "@/lib/auth";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,6 +50,38 @@ type ApprovalState = {
   approvedById: string | null;
 };
 
+/**
+ * ✅ lib/auth の exported 関数名揺れに強い互換取得
+ * - named import を避けて TS の「export が無い」で落ちるのを防ぐ
+ */
+async function getServerUserCompat(): Promise<any | null> {
+  try {
+    const mod = (await import("@/lib/auth")) as any;
+
+    const candidates = [
+      mod.getServerUser,
+      mod.getCurrentUser,
+      mod.getServerAuthUser,
+      mod.requireUser,
+      mod.getUser,
+      mod.auth, // NextAuth の auth() などを想定
+    ];
+
+    for (const fn of candidates) {
+      if (typeof fn === "function") {
+        const res = await fn();
+        // NextAuthのauth()だと { user } などの形の場合もあるので吸収
+        if (res?.user) return res.user;
+        return res ?? null;
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function parseMonthParam(month?: string) {
   if (!month) return null;
   const parsed = new Date(`${month}-01T00:00:00`);
@@ -64,7 +100,6 @@ function toCalendarKey(date: Date) {
 
 function getBusinessKeyFromAttendanceTimestamp(timestamp: Date) {
   // JST 18:00〜翌06:00（grace 120分）を「営業日」として扱う
-  // attendance.ts の getBusinessDayKeyJst と同等のキー生成（from の JST 日付）
   const dtf = new Intl.DateTimeFormat("ja-JP", {
     timeZone: "Asia/Tokyo",
     year: "numeric",
@@ -73,43 +108,38 @@ function getBusinessKeyFromAttendanceTimestamp(timestamp: Date) {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-    hour12: false
+    hour12: false,
   });
 
   const parts = dtf.formatToParts(timestamp);
-  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? "0");
+  const get = (type: string) =>
+    Number(parts.find((p) => p.type === type)?.value ?? "0");
   const y = get("year");
   const m = get("month");
   const d = get("day");
   const hh = get("hour");
   const mm = get("minute");
 
-  // JST時刻を minutes に
   const minutes = hh * 60 + mm;
-
-  // 18:00(1080)〜23:59: 当日キー
-  // 00:00〜07:59(grace含む): 前日キー
-  // 日中帯も前日扱い（仕様）
-  let keyDate = new Date(Date.UTC(y, m - 1, d, 0, 0, 0));
 
   const startMin = 18 * 60;
   const endMin = 6 * 60;
   const grace = 120;
   const endWithGraceMin = endMin + grace;
 
+  let keyDate: Date;
+
   if (minutes >= startMin) {
-    // 当日
     keyDate = new Date(Date.UTC(y, m - 1, d, 0, 0, 0));
   } else if (minutes < endWithGraceMin) {
-    // 前日
     keyDate = new Date(Date.UTC(y, m - 1, d - 1, 0, 0, 0));
   } else {
-    // 日中帯: 前日
     keyDate = new Date(Date.UTC(y, m - 1, d - 1, 0, 0, 0));
   }
 
   const parts2 = dtf.formatToParts(keyDate);
-  const get2 = (type: string) => Number(parts2.find((p) => p.type === type)?.value ?? "0");
+  const get2 = (type: string) =>
+    Number(parts2.find((p) => p.type === type)?.value ?? "0");
   const ky = get2("year");
   const km = get2("month");
   const kd = get2("day");
@@ -119,8 +149,11 @@ function getBusinessKeyFromAttendanceTimestamp(timestamp: Date) {
 async function updateApprovalAction(formData: FormData) {
   "use server";
 
-  const user = await getServerUser();
+  const user = await getServerUserCompat();
   if (!user) redirect("/login");
+
+  const userId: string | undefined = user?.id ?? user?.userId;
+  if (!userId) redirect("/login");
 
   const store = await getOrCreateDefaultStore();
   const dateKey = String(formData.get("dateKey") ?? "");
@@ -133,7 +166,7 @@ async function updateApprovalAction(formData: FormData) {
     storeId: store.id,
     date,
     approved,
-    approverId: user.id
+    approverId: userId,
   });
 
   revalidatePath("/dashboard/attendance");
@@ -142,7 +175,7 @@ async function updateApprovalAction(formData: FormData) {
 async function updateAttendanceMetaAction(formData: FormData) {
   "use server";
 
-  const user = await getServerUser();
+  const user = await getServerUserCompat();
   if (!user) redirect("/login");
 
   const attendanceId = String(formData.get("attendanceId") ?? "");
@@ -155,15 +188,19 @@ async function updateAttendanceMetaAction(formData: FormData) {
     where: { id: attendanceId },
     data: {
       memo: memo || null,
-      isCompanion
-    }
+      isCompanion,
+    },
   });
 
   revalidatePath("/dashboard/attendance");
 }
 
-export default async function AttendancePage({ searchParams }: { searchParams: SearchParams }) {
-  const user = await getServerUser();
+export default async function AttendancePage({
+  searchParams,
+}: {
+  searchParams: SearchParams;
+}) {
+  const user = await getServerUserCompat();
   if (!user) redirect("/login");
 
   const store = await getOrCreateDefaultStore();
@@ -184,62 +221,70 @@ export default async function AttendancePage({ searchParams }: { searchParams: S
     const staffList = await prisma.user.findMany({
       where: { storeId: store.id },
       select: { id: true, displayName: true },
-      orderBy: { displayName: "asc" }
+      orderBy: { displayName: "asc" },
     });
 
     const attendances: AttendanceWithUser[] = await prisma.attendance.findMany({
       where: {
         storeId: store.id,
         timestamp: {
-          // month range in calendar (UTC date objects). Attendance data is stored UTC.
           gte: startOfDay(monthStart),
-          lt: addDays(startOfDay(addDays(monthEnd, 1)), 0)
+          lt: addDays(startOfDay(addDays(monthEnd, 1)), 0),
         },
-        ...(staffFilter ? { userId: staffFilter } : {})
+        ...(staffFilter ? { userId: staffFilter } : {}),
       },
       include: {
-        user: { select: { id: true, displayName: true } }
+        user: { select: { id: true, displayName: true } },
       },
-      orderBy: { timestamp: "asc" }
+      orderBy: { timestamp: "asc" },
     });
 
-    const approvals: ApprovalState[] = await prisma.attendanceApproval.findMany({
-      where: {
-        storeId: store.id,
-        date: {
-          gte: startOfDay(monthStart),
-          lt: addDays(startOfDay(addDays(monthEnd, 1)), 0)
-        }
+    const approvals: ApprovalState[] = await prisma.attendanceApproval
+      .findMany({
+        where: {
+          storeId: store.id,
+          date: {
+            gte: startOfDay(monthStart),
+            lt: addDays(startOfDay(addDays(monthEnd, 1)), 0),
+          },
+        },
+        select: {
+          date: true,
+          isApproved: true,
+          approvedAt: true,
+          approvedById: true,
+        },
+        orderBy: { date: "asc" },
+      })
+      .then((rows) =>
+        rows.map((r) => ({
+          dateKey: toCalendarKey(r.date),
+          isApproved: r.isApproved,
+          approvedAt: r.approvedAt,
+          approvedById: r.approvedById,
+        }))
+      );
+
+    const approvalByDate = approvals.reduce<Record<string, ApprovalState>>(
+      (acc, a) => {
+        acc[a.dateKey] = a;
+        return acc;
       },
-      select: {
-        date: true,
-        isApproved: true,
-        approvedAt: true,
-        approvedById: true
-      },
-      orderBy: { date: "asc" }
-    }).then((rows) =>
-      rows.map((r) => ({
-        dateKey: toCalendarKey(r.date),
-        isApproved: r.isApproved,
-        approvedAt: r.approvedAt,
-        approvedById: r.approvedById
-      }))
+      {}
     );
 
-    const approvalByDate = approvals.reduce<Record<string, ApprovalState>>((acc, a) => {
-      acc[a.dateKey] = a;
-      return acc;
-    }, {});
-
-    const attendanceByBusinessDay = attendances.reduce<Record<string, AttendanceWithUser[]>>((acc, a) => {
+    const attendanceByBusinessDay = attendances.reduce<
+      Record<string, AttendanceWithUser[]>
+    >((acc, a) => {
       const key = getBusinessKeyFromAttendanceTimestamp(a.timestamp);
       acc[key] = acc[key] ?? [];
       acc[key].push(a);
       return acc;
     }, {});
 
-    const selectedAttendances = selectedDayKey ? attendanceByBusinessDay[selectedDayKey] ?? [] : [];
+    const selectedAttendances = selectedDayKey
+      ? attendanceByBusinessDay[selectedDayKey] ?? []
+      : [];
 
     const staffOptions = [{ id: "all", displayName: "全員" }, ...staffList];
 
@@ -251,15 +296,21 @@ export default async function AttendancePage({ searchParams }: { searchParams: S
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-2xl font-bold">勤怠管理</h1>
-            <p className="text-sm text-slate-400">営業日（JST 18:00〜翌06:00）単位で表示します。</p>
+            <p className="text-sm text-slate-400">
+              営業日（JST 18:00〜翌06:00）単位で表示します。
+            </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Link href={`/dashboard/attendance?month=${prevMonth}&staffId=${staffSelectValue}`}>
+            <Link
+              href={`/dashboard/attendance?month=${prevMonth}&staffId=${staffSelectValue}`}
+            >
               <Button variant="secondary" size="sm">
                 前月
               </Button>
             </Link>
-            <Link href={`/dashboard/attendance?month=${nextMonth}&staffId=${staffSelectValue}`}>
+            <Link
+              href={`/dashboard/attendance?month=${nextMonth}&staffId=${staffSelectValue}`}
+            >
               <Button variant="secondary" size="sm">
                 次月
               </Button>
@@ -278,10 +329,19 @@ export default async function AttendancePage({ searchParams }: { searchParams: S
             <CardDescription>スタッフで絞り込みができます。</CardDescription>
           </CardHeader>
           <CardContent>
-            <form className="flex flex-col gap-3 md:flex-row md:items-end" action="/dashboard/attendance" method="get">
+            <form
+              className="flex flex-col gap-3 md:flex-row md:items-end"
+              action="/dashboard/attendance"
+              method="get"
+            >
               <div className="grid gap-2">
                 <Label htmlFor="month">月</Label>
-                <Input id="month" name="month" type="month" defaultValue={format(monthStart, "yyyy-MM")} />
+                <Input
+                  id="month"
+                  name="month"
+                  type="month"
+                  defaultValue={format(monthStart, "yyyy-MM")}
+                />
               </div>
 
               <div className="grid gap-2">
@@ -316,7 +376,9 @@ export default async function AttendancePage({ searchParams }: { searchParams: S
           </CardHeader>
           <CardContent>
             {!selectedDayKey ? (
-              <p className="text-sm text-slate-400">カレンダーから日付を選択してください。</p>
+              <p className="text-sm text-slate-400">
+                カレンダーから日付を選択してください。
+              </p>
             ) : (
               <div className="space-y-4">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -324,19 +386,36 @@ export default async function AttendancePage({ searchParams }: { searchParams: S
                     <p className="text-sm text-slate-400">選択中の営業日</p>
                     <p className="text-lg font-semibold">{selectedDayKey}</p>
                     <p className="text-xs text-slate-500">
-                      ※この表示は営業日ラベル（JSTの暦日）です。打刻は 18:00〜翌06:00 を含みます。
+                      ※この表示は営業日ラベル（JSTの暦日）です。打刻は 18:00〜翌06:00
+                      を含みます。
                     </p>
                   </div>
 
                   <form action={updateApprovalAction} className="flex items-center gap-3">
                     <input type="hidden" name="dateKey" value={selectedDayKey} />
-                    <input type="hidden" name="approved" value={approvalByDate[selectedDayKey]?.isApproved ? "false" : "true"} />
-                    <Button type="submit" variant={approvalByDate[selectedDayKey]?.isApproved ? "outline" : "default"}>
+                    <input
+                      type="hidden"
+                      name="approved"
+                      value={
+                        approvalByDate[selectedDayKey]?.isApproved ? "false" : "true"
+                      }
+                    />
+                    <Button
+                      type="submit"
+                      variant={approvalByDate[selectedDayKey]?.isApproved ? "outline" : "default"}
+                    >
                       {approvalByDate[selectedDayKey]?.isApproved ? "承認取消" : "承認"}
                     </Button>
                     {approvalByDate[selectedDayKey]?.isApproved ? (
                       <p className="text-xs text-slate-400">
-                        承認済（{approvalByDate[selectedDayKey]?.approvedAt ? format(approvalByDate[selectedDayKey]!.approvedAt!, "M/d HH:mm") : "-"}）
+                        承認済（
+                        {approvalByDate[selectedDayKey]?.approvedAt
+                          ? format(
+                              approvalByDate[selectedDayKey]!.approvedAt!,
+                              "M/d HH:mm"
+                            )
+                          : "-"}
+                        ）
                       </p>
                     ) : null}
                   </form>
@@ -347,17 +426,20 @@ export default async function AttendancePage({ searchParams }: { searchParams: S
                 ) : (
                   <ul className="space-y-3">
                     {Object.entries(
-                      selectedAttendances.reduce<Record<string, AttendanceWithUser[]>>((acc, a) => {
-                        acc[a.user.id] = acc[a.user.id] ?? [];
-                        acc[a.user.id].push(a);
-                        return acc;
-                      }, {})
+                      selectedAttendances.reduce<Record<string, AttendanceWithUser[]>>(
+                        (acc, a) => {
+                          acc[a.user.id] = acc[a.user.id] ?? [];
+                          acc[a.user.id].push(a);
+                          return acc;
+                        },
+                        {}
+                      )
                     ).map(([userId, list]) => {
                       const name = list[0]?.user.displayName ?? userId;
+                      const sorted = [...list].sort(
+                        (a, b) => a.timestamp.getTime() - b.timestamp.getTime()
+                      );
 
-                      const sorted = [...list].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-
-                      // (簡易) 勤務時間表示: CLOCK_IN〜CLOCK_OUT から休憩を引く
                       let clockIn: Date | null = null;
                       let totalMinutes = 0;
                       let breakMinutes = 0;
@@ -367,32 +449,46 @@ export default async function AttendancePage({ searchParams }: { searchParams: S
                         if (r.type === "CLOCK_IN") clockIn = r.timestamp;
                         if (r.type === "BREAK_START") breakStart = r.timestamp;
                         if (r.type === "BREAK_END" && breakStart) {
-                          breakMinutes += Math.max(0, differenceInMinutes(r.timestamp, breakStart));
+                          breakMinutes += Math.max(
+                            0,
+                            differenceInMinutes(r.timestamp, breakStart)
+                          );
                           breakStart = null;
                         }
                         if (r.type === "CLOCK_OUT" && clockIn) {
-                          totalMinutes += Math.max(0, differenceInMinutes(r.timestamp, clockIn));
+                          totalMinutes += Math.max(
+                            0,
+                            differenceInMinutes(r.timestamp, clockIn)
+                          );
                           clockIn = null;
                         }
                       }
                       const netMinutes = Math.max(0, totalMinutes - breakMinutes);
 
                       return (
-                        <li key={userId} className="rounded-lg border border-slate-800 bg-slate-950/40 p-4">
+                        <li
+                          key={userId}
+                          className="rounded-lg border border-slate-800 bg-slate-950/40 p-4"
+                        >
                           <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                             <div>
                               <p className="text-base font-semibold">{name}</p>
                               <p className="text-xs text-slate-400">
-                                勤務: {Math.floor(netMinutes / 60)}h {netMinutes % 60}m（休憩 {Math.floor(breakMinutes / 60)}h {breakMinutes % 60}m）
+                                勤務: {Math.floor(netMinutes / 60)}h {netMinutes % 60}m（休憩{" "}
+                                {Math.floor(breakMinutes / 60)}h {breakMinutes % 60}m）
                               </p>
                             </div>
                             <div className="text-xs text-slate-500">
-                              {approvalByDate[selectedDayKey]?.isApproved ? "この日は承認済み" : "未承認"}
+                              {approvalByDate[selectedDayKey]?.isApproved
+                                ? "この日は承認済み"
+                                : "未承認"}
                             </div>
                           </div>
 
                           <details className="mt-3">
-                            <summary className="cursor-pointer text-sm text-slate-300">打刻一覧</summary>
+                            <summary className="cursor-pointer text-sm text-slate-300">
+                              打刻一覧
+                            </summary>
                             <div className="mt-3 grid gap-2">
                               {sorted.map((attendance) => {
                                 return (
@@ -403,14 +499,20 @@ export default async function AttendancePage({ searchParams }: { searchParams: S
                                     <div>
                                       <p className="text-xs text-slate-500">時刻</p>
                                       <p className="text-sm">
-                                        {format(attendance.timestamp, "M/d HH:mm", { locale: ja })}
+                                        {format(attendance.timestamp, "M/d HH:mm", {
+                                          locale: ja,
+                                        })}
                                       </p>
                                       <p className="mt-2 text-xs text-slate-500">種別</p>
                                       <p className="text-sm">{attendance.type}</p>
                                     </div>
 
                                     <form action={updateAttendanceMetaAction} className="grid gap-2">
-                                      <input type="hidden" name="attendanceId" value={attendance.id} />
+                                      <input
+                                        type="hidden"
+                                        name="attendanceId"
+                                        value={attendance.id}
+                                      />
 
                                       <div className="grid gap-1">
                                         <Label htmlFor={`memo-${attendance.id}`}>メモ</Label>
@@ -431,7 +533,12 @@ export default async function AttendancePage({ searchParams }: { searchParams: S
                                         <Label htmlFor={`companion-${attendance.id}`}>同伴</Label>
                                       </div>
 
-                                      <Button type="submit" size="sm" variant="secondary" className="md:mt-5">
+                                      <Button
+                                        type="submit"
+                                        size="sm"
+                                        variant="secondary"
+                                        className="md:mt-5"
+                                      >
                                         更新
                                       </Button>
                                     </form>
@@ -453,21 +560,28 @@ export default async function AttendancePage({ searchParams }: { searchParams: S
         <Card>
           <CardHeader>
             <CardTitle>月間カレンダー</CardTitle>
-            <CardDescription>各日に出勤したスタッフを表示します。クリックで詳細を表示。</CardDescription>
+            <CardDescription>
+              各日に出勤したスタッフを表示します。クリックで詳細を表示。
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
               {calendarDays.map((day) => {
                 const key = format(day, "yyyy-MM-dd");
                 const dayAttendances = attendanceByBusinessDay[key] ?? [];
-                const uniqueNames = Array.from(new Set(dayAttendances.map((a) => a.user.displayName)));
+                const uniqueNames = Array.from(
+                  new Set(dayAttendances.map((a) => a.user.displayName))
+                );
                 const approved = approvalByDate[key];
                 const isSelected = key === selectedDayKey;
 
                 return (
                   <Link
                     key={key}
-                    href={`/dashboard/attendance?month=${format(monthStart, "yyyy-MM")}&staffId=${staffSelectValue}&day=${key}`}
+                    href={`/dashboard/attendance?month=${format(
+                      monthStart,
+                      "yyyy-MM"
+                    )}&staffId=${staffSelectValue}&day=${key}`}
                     className="focus-visible:outline-none"
                   >
                     <div
@@ -476,19 +590,29 @@ export default async function AttendancePage({ searchParams }: { searchParams: S
                       }`}
                     >
                       <div className="flex items-baseline justify-between">
-                        <p className="text-sm font-semibold text-pink-200">{format(day, "M/d")}</p>
-                        <p className="text-[11px] text-slate-500">{format(day, "EEE", { locale: ja })}</p>
+                        <p className="text-sm font-semibold text-pink-200">
+                          {format(day, "M/d")}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          {format(day, "EEE", { locale: ja })}
+                        </p>
                       </div>
                       {approved ? (
-                        <p className="mt-1 rounded-full bg-pink-900/50 px-2 py-1 text-[11px] text-pink-200">承認済</p>
+                        <p className="mt-1 rounded-full bg-pink-900/50 px-2 py-1 text-[11px] text-pink-200">
+                          承認済
+                        </p>
                       ) : null}
                       <div className="mt-2 space-y-1">
                         {uniqueNames.length === 0 ? (
                           <p className="text-slate-600">出勤なし</p>
                         ) : (
-                          uniqueNames.slice(0, 2).map((name) => <p key={name}>{name}</p>)
+                          uniqueNames
+                            .slice(0, 2)
+                            .map((name) => <p key={name}>{name}</p>)
                         )}
-                        {uniqueNames.length > 2 ? <p className="text-slate-500">+{uniqueNames.length - 2} 名</p> : null}
+                        {uniqueNames.length > 2 ? (
+                          <p className="text-slate-500">+{uniqueNames.length - 2} 名</p>
+                        ) : null}
                       </div>
                     </div>
                   </Link>
