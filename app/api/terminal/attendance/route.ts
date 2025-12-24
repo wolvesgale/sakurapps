@@ -62,7 +62,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
     }
 
-    // ★「日単位」ではなく「スタッフ単位」で承認ロック
+    // ★スタッフ単位で承認済みかをチェック（営業日範囲: 18:00〜翌06:00）
     const { from, to } = getBusinessDayRangeJst(new Date(), {
       startHour: 18,
       endHour: 6,
