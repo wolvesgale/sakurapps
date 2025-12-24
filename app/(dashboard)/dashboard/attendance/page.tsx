@@ -97,7 +97,7 @@ function getBusinessDayKeyFromTimestamp(timestamp: Date) {
   return format(toJst(from), "yyyy-MM-dd");
 }
 
-function getBusinessRangeFromCalendarDay(day: Date) {
+function _getBusinessRangeFromCalendarDay(day: Date) {
   // カレンダーの “その日” は営業日のラベル扱い
   // from: その日 18:00 JST / to: 翌日 06:00 JST
   // → これは attendance.ts と整合させるため
