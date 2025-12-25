@@ -53,25 +53,42 @@ type ApprovalState = {
  * ✅ lib/auth の exported 関数名揺れに強い互換取得
  * - named import を避けて TS の「export が無い」で落ちるのを防ぐ
  */
-async function getServerUserCompat(): Promise<any | null> {
-  try {
-    const mod = (await import("@/lib/auth")) as any;
+type ServerUser = Record<string, unknown> & {
+  id?: string;
+  userId?: string;
+};
 
-    const candidates = [
-      mod.getServerUser,
-      mod.getCurrentUser,
-      mod.getServerAuthUser,
-      mod.requireUser,
-      mod.getUser,
-      mod.auth, // NextAuth の auth() などを想定
-    ];
+type UnknownFn = () => Promise<unknown> | unknown;
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+async function getServerUserCompat(): Promise<ServerUser | null> {
+  try {
+    const mod = (await import("@/lib/auth")) as Record<string, unknown>;
+
+    const candidates: UnknownFn[] = [
+      mod["getServerUser"],
+      mod["getCurrentUser"],
+      mod["getServerAuthUser"],
+      mod["requireUser"],
+      mod["getUser"],
+      mod["auth"],
+    ].filter((fn): fn is UnknownFn => typeof fn === "function");
 
     for (const fn of candidates) {
-      if (typeof fn === "function") {
-        const res = await fn();
-        if (res?.user) return res.user; // auth()系の吸収
-        return res ?? null;
+      const res = await Promise.resolve(fn());
+
+      // NextAuthの auth() 系: { user: {...} } を想定
+      if (isRecord(res) && "user" in res) {
+        const u = (res as Record<string, unknown>)["user"];
+        if (isRecord(u)) return u as ServerUser;
+        return null;
       }
+
+      // 直接 user オブジェクトが返る系
+      if (isRecord(res)) return res as ServerUser;
     }
 
     return null;
