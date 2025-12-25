@@ -4,8 +4,9 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { verifyTerminalAccess, getBusinessDayRangeJst } from "@/lib/terminal";
+import { verifyTerminalAccess } from "@/lib/terminal";
 import { getOrCreateDefaultStore } from "@/lib/store";
+import { addDays, startOfDay } from "date-fns";
 
 const allowedTypes = ["CLOCK_IN", "CLOCK_OUT", "BREAK_START", "BREAK_END"] as const;
 type AttendanceType = (typeof allowedTypes)[number];

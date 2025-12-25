@@ -1,129 +1,7 @@
-// lib/attendance.ts
+import { addDays, endOfMonth, format, startOfDay, startOfMonth } from "date-fns";
 import type { Attendance } from "@prisma/client";
 import { prisma } from "./prisma";
 import { getOrCreateDefaultStore } from "./store";
-// Import necessary date utility functions from date-fns
-import { addDays, startOfMonth, endOfMonth } from "date-fns";
-
-/**
- * JSTパーツを取り出す
- */
-function getJstParts(date: Date) {
-  const dtf = new Intl.DateTimeFormat("ja-JP", {
-    timeZone: "Asia/Tokyo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false
-  });
-
-  const parts = dtf.formatToParts(date);
-  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? "0");
-
-  return {
-    year: get("year"),
-    month: get("month"),
-    day: get("day"),
-    hour: get("hour"),
-    minute: get("minute"),
-    second: get("second")
-  };
-}
-
-// JSTで指定した日時を「UTCのDate」に変換（JST=UTC+9）
-function utcDateFromJst(
-  y: number,
-  m: number,
-  d: number,
-  hh: number,
-  mm: number,
-  ss = 0,
-  ms = 0
-) {
-  return new Date(Date.UTC(y, m - 1, d, hh - 9, mm, ss, ms));
-}
-
-/**
- * 営業日定義（JST固定）:
- * - 基本: 18:00〜翌06:00 を 1営業日として扱う
- * - graceMinutes: 06:00直後のズレを前営業日に寄せる猶予
- */
-export function getBusinessDayRangeJst(
-  now: Date,
-  {
-    startHour = 18,
-    endHour = 6,
-    graceMinutes = 120
-  }: { startHour?: number; endHour?: number; graceMinutes?: number } = {}
-) {
-  const j = getJstParts(now);
-
-  const todayEndJst = utcDateFromJst(j.year, j.month, j.day, endHour, 0, 0, 0);
-  const todayStartJst = utcDateFromJst(j.year, j.month, j.day, startHour, 0, 0, 0);
-
-  const endWithGrace = new Date(todayEndJst.getTime() + graceMinutes * 60 * 1000);
-
-  let from: Date;
-  let to: Date;
-
-  if (now < endWithGrace) {
-    // 前営業日: 昨日18:00〜今日06:00（JST）
-    from = utcDateFromJst(j.year, j.month, j.day - 1, startHour, 0, 0, 0);
-    to = utcDateFromJst(j.year, j.month, j.day, endHour, 0, 0, 0);
-  } else if (now >= todayStartJst) {
-    // 当営業日: 今日18:00〜明日06:00（JST）
-    from = utcDateFromJst(j.year, j.month, j.day, startHour, 0, 0, 0);
-    to = utcDateFromJst(j.year, j.month, j.day + 1, endHour, 0, 0, 0);
-  } else {
-    // 日中帯は前営業日を表示
-    from = utcDateFromJst(j.year, j.month, j.day - 1, startHour, 0, 0, 0);
-    to = utcDateFromJst(j.year, j.month, j.day, endHour, 0, 0, 0);
-  }
-
-  return { from, to };
-}
-
-/**
- * カレンダーで選んだ「営業日ラベル（yyyy-mm-dd）」を
- * その営業日の範囲（18:00〜翌06:00 JST）に変換する。
- *
- * dateInput は "2025-12-23" のような日付を想定。
- * - from: 2025-12-23 18:00 JST
- * - to  : 2025-12-24 06:00 JST
- */
-export function getBusinessDayRangeFromCalendarDateJst(
-  dateInput: Date,
-  { startHour = 18, endHour = 6 }: { startHour?: number; endHour?: number } = {}
-) {
-  const j = getJstParts(dateInput);
-  const from = utcDateFromJst(j.year, j.month, j.day, startHour, 0, 0, 0);
-  const to = utcDateFromJst(j.year, j.month, j.day + 1, endHour, 0, 0, 0);
-  return { from, to };
-}
-
-/**
- * 任意の打刻 timestamp が属する「営業日ラベル」を返す（JST基準）
- * - 18:00〜23:59 -> 当日
- * - 00:00〜(6:00+grace) -> 前日扱い
- * - 日中帯も前日扱い（仕様に合わせる）
- */
-export function getBusinessDayKeyJst(
-  timestamp: Date,
-  {
-    startHour = 18,
-    endHour = 6,
-    graceMinutes = 120
-  }: { startHour?: number; endHour?: number; graceMinutes?: number } = {}
-) {
-  // NOTE: `to` is not needed here; keep only `from` to satisfy no-unused-vars.
-  const { from } = getBusinessDayRangeJst(timestamp, { startHour, endHour, graceMinutes });
-  // 営業日の "from" に対応する JST日付をキーにする
-  const parts = getJstParts(from);
-  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
-}
 
 type MonthlySummaryResult = {
   totalMinutes: number;
@@ -141,16 +19,15 @@ type MonthlySummaryParams = {
 
 type DayApprovalParams = {
   storeId?: string;
-  date: Date; // カレンダーで選んだ日付（営業日ラベル）
+  date: Date;
   approved: boolean;
   approverId: string;
 };
 
-/**
- * ここは「日付そのもの」ではなく「営業日ラベル」を元に範囲を決めるように変更済み。
- */
 export function getDayRange(date: Date) {
-  return getBusinessDayRangeFromCalendarDateJst(date, { startHour: 18, endHour: 6 });
+  const from = startOfDay(date);
+  const to = addDays(from, 1);
+  return { from, to };
 }
 
 function calculateDayMinutes(records: Attendance[]): number {
@@ -167,7 +44,9 @@ function calculateDayMinutes(records: Attendance[]): number {
       case "CLOCK_OUT":
         if (currentStart) {
           const diff = (record.timestamp.getTime() - currentStart.getTime()) / (1000 * 60);
-          if (diff > 0) minutes += diff;
+          if (diff > 0) {
+            minutes += diff;
+          }
           currentStart = null;
         }
         break;
@@ -188,14 +67,7 @@ export function calculateMonthlySummaryFromRecords(records: Attendance[]): Month
   let roundedMinutes = 0;
 
   for (const record of records) {
-    // ★ここが超重要：暦日ではなく営業日キーで集計する
-    const dayKey = getBusinessDayKeyJst(record.timestamp, {
-      startHour: 18,
-      endHour: 6,
-      graceMinutes: 120
-    });
-    const key = `${record.userId}-${dayKey}`;
-
+    const key = `${record.userId}-${format(record.timestamp, "yyyy-MM-dd")}`;
     const list = grouped.get(key) ?? [];
     list.push(record);
     grouped.set(key, list);
@@ -233,20 +105,9 @@ export async function getMonthlyAttendanceSummary({ storeId, staffId, year, mont
   return calculateMonthlySummaryFromRecords(records);
 }
 
-/**
- * 承認は「営業日範囲」に対して Attendance に approvedAt/approvedById を付与する。
- * ただし、AttendanceApproval（店×日）も “表示用の状態” としては残してOK。
- *
- * 重要:
- * - ここで AttendanceApproval を更新してもよいが
- * - ターミナル打刻を「日単位承認」で止めるのは禁止（別ファイルで修正）
- */
 export async function updateDayApproval({ storeId, date, approved, approverId }: DayApprovalParams) {
   const targetStoreId = storeId ?? (await getOrCreateDefaultStore()).id;
-
-  // ★暦日ではなく営業日（18:00〜翌06:00）を対象にする
-  const { from, to } = getBusinessDayRangeFromCalendarDateJst(date, { startHour: 18, endHour: 6 });
-
+  const { from, to } = getDayRange(date);
   const approvedAt = approved ? new Date() : null;
   const approvedById = approved ? approverId : null;
 
@@ -261,12 +122,8 @@ export async function updateDayApproval({ storeId, date, approved, approverId }:
     }
   });
 
-  // ★AttendanceApproval は「営業日ラベル（JSTの 00:00）」で一意に持つ
-  const j = getJstParts(date);
-  const labelDate = utcDateFromJst(j.year, j.month, j.day, 0, 0, 0, 0);
-
   await prisma.attendanceApproval.upsert({
-    where: { storeId_date: { storeId: targetStoreId, date: labelDate } },
+    where: { storeId_date: { storeId: targetStoreId, date: from } },
     update: {
       isApproved: approved,
       approvedAt,
@@ -274,7 +131,7 @@ export async function updateDayApproval({ storeId, date, approved, approverId }:
     },
     create: {
       storeId: targetStoreId,
-      date: labelDate,
+      date: from,
       isApproved: approved,
       approvedAt,
       approvedById

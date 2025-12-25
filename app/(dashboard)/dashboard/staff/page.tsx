@@ -115,9 +115,107 @@ async function createStaff(formData: FormData) {
   redirect("/dashboard/staff");
 }
 
+async function updateStaff(formData: FormData) {
+  "use server";
+  const session = await getCurrentSession();
+
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) {
+    throw new Error("Unauthorized");
+  }
+
+  const staffId = formData.get("staffId");
+  const displayName = formData.get("displayName");
+  const email = formData.get("email");
+  const role = formData.get("role");
+  const isActive = formData.get("isActive");
+
+  if (!staffId || typeof staffId !== "string") {
+    redirect(`/dashboard/staff?error=${encodeURIComponent("スタッフIDが不明です。")}`);
+  }
+
+  if (!displayName || typeof displayName !== "string" || displayName.trim().length === 0) {
+    redirect(`/dashboard/staff?error=${encodeURIComponent("表示名を入力してください。")}`);
+  }
+
+  if (!role || typeof role !== "string") {
+    redirect(`/dashboard/staff?error=${encodeURIComponent("ロールを選択してください。")}`);
+  }
+
+  const normalizedEmail =
+    typeof email === "string" && email.length > 0 ? email.toLowerCase() : null;
+
+  try {
+    await prisma.user.update({
+      where: { id: staffId },
+      data: {
+        displayName: displayName.trim(),
+        role: role as Prisma.UserUpdateInput["role"],
+        isActive: Boolean(isActive),
+        ...(normalizedEmail ? { email: normalizedEmail } : { email: null })
+      }
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const message = "このメールアドレスは既に使用されています。別のメールを入力してください。";
+      redirect(`/dashboard/staff?error=${encodeURIComponent(message)}`);
+    }
+
+    console.error("[staff:update]", error);
+    redirect(`/dashboard/staff?error=${encodeURIComponent("スタッフ更新に失敗しました。")}`);
+  }
+
+  revalidatePath("/dashboard/staff");
+  redirect("/dashboard/staff");
+}
+
+async function deleteStaff(formData: FormData) {
+  "use server";
+  const session = await getCurrentSession();
+
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) {
+    throw new Error("Unauthorized");
+  }
+
+  const staffId = formData.get("staffId");
+
+  if (!staffId || typeof staffId !== "string") {
+    redirect(`/dashboard/staff?error=${encodeURIComponent("スタッフIDが不明です。")}`);
+  }
+
+  try {
+    await prisma.user.delete({
+      where: { id: staffId }
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+      try {
+        await prisma.user.update({
+          where: { id: staffId },
+          data: { isActive: false }
+        });
+        const message = "関連データがあるため削除できませんでした。代わりに無効化しました。";
+        redirect(`/dashboard/staff?error=${encodeURIComponent(message)}`);
+      } catch (secondaryError) {
+        console.error("[staff:disable-fallback]", secondaryError);
+      }
+    }
+
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+      redirect(`/dashboard/staff?error=${encodeURIComponent("スタッフが見つかりませんでした。")}`);
+    }
+
+    console.error("[staff:delete]", error);
+    redirect(`/dashboard/staff?error=${encodeURIComponent("スタッフ削除に失敗しました。")}`);
+  }
+
+  revalidatePath("/dashboard/staff");
+  redirect("/dashboard/staff");
+}
+
 type StaffPageProps = {
   searchParams?: {
     error?: string;
+    message?: string;
   };
 };
 
@@ -129,6 +227,7 @@ export default async function StaffPage({ searchParams }: StaffPageProps) {
   }
 
   const errorMessage = searchParams?.error ?? null;
+  const infoMessage = searchParams?.message ?? null;
 
   const defaultStore = await getOrCreateDefaultStore();
 
@@ -211,6 +310,9 @@ export default async function StaffPage({ searchParams }: StaffPageProps) {
             {errorMessage && (
               <p className="sm:col-span-2 text-sm text-red-400">{errorMessage}</p>
             )}
+            {infoMessage && !errorMessage ? (
+              <p className="sm:col-span-2 text-sm text-green-400">{infoMessage}</p>
+            ) : null}
             <Button type="submit" className="sm:col-span-2">
               スタッフを作成
             </Button>
@@ -229,14 +331,61 @@ export default async function StaffPage({ searchParams }: StaffPageProps) {
           ) : (
             <ul className="space-y-2 text-sm">
               {staff.map((member) => (
-                <li key={member.id} className="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
-                  <p className="text-lg font-semibold text-pink-200">{member.displayName}</p>
-                  <p className="text-xs text-slate-400">ユーザーID: {member.username}</p>
-                  <p className="text-xs text-slate-400">ロール: {member.role}</p>
-                  <p className="text-xs text-slate-400">店舗: {member.store?.name ?? "未設定"}</p>
-                  <p className="text-xs text-slate-500">
-                    メール: {member.email ?? "未登録"} / 状態: {member.isActive ? "有効" : "停止"}
-                  </p>
+                <li key={member.id} className="space-y-3 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+                  <div className="flex flex-col gap-1">
+                    <p className="text-lg font-semibold text-pink-200">{member.displayName}</p>
+                    <p className="text-xs text-slate-400">ユーザーID: {member.username}</p>
+                    <p className="text-xs text-slate-400">店舗: {member.store?.name ?? "未設定"}</p>
+                    <p className="text-xs text-slate-500">
+                      メール: {member.email ?? "未登録"} / 状態: {member.isActive ? "有効" : "停止"}
+                    </p>
+                  </div>
+                  <form action={updateStaff} className="grid gap-3 sm:grid-cols-2">
+                    <input type="hidden" name="staffId" value={member.id} />
+                    <div className="space-y-1">
+                      <Label className="text-xs text-slate-300">表示名</Label>
+                      <Input name="displayName" defaultValue={member.displayName} required />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-slate-300">メール</Label>
+                      <Input name="email" type="email" defaultValue={member.email ?? ""} placeholder="login@example.com" />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-slate-300">ロール</Label>
+                      <Select name="role" defaultValue={member.role}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="CAST">キャスト</SelectItem>
+                          <SelectItem value="DRIVER">ドライバー</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex items-center gap-2 pt-5">
+                      <input
+                        id={`active-${member.id}`}
+                        name="isActive"
+                        type="checkbox"
+                        defaultChecked={member.isActive}
+                        className="h-4 w-4 rounded border border-slate-700 bg-black text-pink-400 focus-visible:outline-none"
+                      />
+                      <Label htmlFor={`active-${member.id}`} className="text-xs text-slate-300">
+                        有効
+                      </Label>
+                    </div>
+                    <div className="flex flex-wrap gap-2 sm:col-span-2">
+                      <Button type="submit" size="sm">
+                        更新
+                      </Button>
+                    </div>
+                  </form>
+                  <form action={deleteStaff} className="flex flex-wrap gap-2">
+                    <input type="hidden" name="staffId" value={member.id} />
+                    <Button type="submit" size="sm" variant="destructive">
+                      削除
+                    </Button>
+                  </form>
                 </li>
               ))}
             </ul>

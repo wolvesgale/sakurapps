@@ -41,6 +41,7 @@ export function AppHeader() {
                 <Link
                   key={link.href}
                   href={link.href}
+                  prefetch={false}
                   className={cn(
                     "transition-colors hover:text-pink-300",
                     pathname.startsWith(link.href) ? "text-pink-400" : "text-slate-400"
