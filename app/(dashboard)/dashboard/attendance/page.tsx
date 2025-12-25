@@ -1,5 +1,4 @@
 // app/(dashboard)/dashboard/attendance/page.tsx
-"use client";
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -70,8 +69,7 @@ async function getServerUserCompat(): Promise<any | null> {
     for (const fn of candidates) {
       if (typeof fn === "function") {
         const res = await fn();
-        // NextAuthのauth()だと { user } などの形の場合もあるので吸収
-        if (res?.user) return res.user;
+        if (res?.user) return res.user; // auth()系の吸収
         return res ?? null;
       }
     }
