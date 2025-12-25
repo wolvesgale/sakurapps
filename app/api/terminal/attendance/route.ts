@@ -6,7 +6,6 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { verifyTerminalAccess } from "@/lib/terminal";
 import { getOrCreateDefaultStore } from "@/lib/store";
-import { addDays, startOfDay } from "date-fns";
 
 const allowedTypes = ["CLOCK_IN", "CLOCK_OUT", "BREAK_START", "BREAK_END"] as const;
 type AttendanceType = (typeof allowedTypes)[number];
