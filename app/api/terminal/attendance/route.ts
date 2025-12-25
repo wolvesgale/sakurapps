@@ -1,3 +1,4 @@
+// app/api/terminal/attendance/route.ts
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
@@ -8,7 +9,6 @@ import { getOrCreateDefaultStore } from "@/lib/store";
 import { addDays, startOfDay } from "date-fns";
 
 const allowedTypes = ["CLOCK_IN", "CLOCK_OUT", "BREAK_START", "BREAK_END"] as const;
-
 type AttendanceType = (typeof allowedTypes)[number];
 
 export async function POST(request: Request) {
@@ -63,20 +63,26 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
     }
 
-    const dayStart = startOfDay(new Date());
-    const dayEnd = addDays(dayStart, 1);
-
-    const dailyApproval = await prisma.attendanceApproval.findFirst({
-      where: {
-        storeId: targetStoreId,
-        date: { gte: dayStart, lt: dayEnd },
-        isApproved: true
-      }
+    // ★スタッフ単位で承認済みかをチェック（営業日範囲: 18:00〜翌06:00）
+    const { from, to } = getBusinessDayRangeJst(new Date(), {
+      startHour: 18,
+      endHour: 6,
+      graceMinutes: 120
     });
 
-    if (dailyApproval) {
+    const staffHasApproved = await prisma.attendance.findFirst({
+      where: {
+        storeId: targetStoreId,
+        userId: staff.id,
+        timestamp: { gte: from, lt: to },
+        approvedAt: { not: null }
+      },
+      select: { id: true }
+    });
+
+    if (staffHasApproved) {
       return NextResponse.json(
-        { error: "この日の勤怠は承認済みのため編集できません" },
+        { error: "このスタッフの勤怠は承認済みのため編集できません" },
         { status: 400 }
       );
     }
