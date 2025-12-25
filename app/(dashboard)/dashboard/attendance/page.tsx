@@ -167,7 +167,12 @@ async function updateApprovalAction(formData: FormData) {
   const user = await getServerUserCompat();
   if (!user) redirect("/login");
 
-  const userId: string | undefined = user?.id ?? user?.userId;
+const userId =
+  typeof user?.id === "string"
+    ? user.id
+    : typeof user?.userId === "string"
+      ? user.userId
+      : undefined;
   if (!userId) redirect("/login");
 
   const store = await getOrCreateDefaultStore();
