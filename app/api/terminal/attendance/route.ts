@@ -6,7 +6,6 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { verifyTerminalAccess } from "@/lib/terminal";
 import { getOrCreateDefaultStore } from "@/lib/store";
-import { getBusinessDayRangeJst } from "@/lib/terminal";
 
 const allowedTypes = ["CLOCK_IN", "CLOCK_OUT", "BREAK_START", "BREAK_END"] as const;
 type AttendanceType = (typeof allowedTypes)[number];
@@ -38,7 +37,6 @@ export async function POST(request: Request) {
     const targetStoreId = storeId ?? defaultStore.id;
 
     const terminal = await verifyTerminalAccess(targetStoreId, terminalId);
-
     if (!terminal) {
       return NextResponse.json({ error: "Unauthorized terminal" }, { status: 403 });
     }
@@ -47,8 +45,8 @@ export async function POST(request: Request) {
       where: {
         id: staffId,
         role: { in: ["CAST", "DRIVER"] },
-        isActive: true
-      }
+        isActive: true,
+      },
     });
 
     if (!staff) {
@@ -63,29 +61,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
     }
 
-    // ★スタッフ単位で承認済みかをチェック（営業日範囲: 18:00〜翌06:00）
-    const { from, to } = getBusinessDayRangeJst(new Date(), {
-      startHour: 18,
-      endHour: 6,
-      graceMinutes: 120
-    });
-
-    const staffHasApproved = await prisma.attendance.findFirst({
-      where: {
-        storeId: targetStoreId,
-        userId: staff.id,
-        timestamp: { gte: from, lt: to },
-        approvedAt: { not: null }
-      },
-      select: { id: true }
-    });
-
-    if (staffHasApproved) {
-      return NextResponse.json(
-        { error: "このスタッフの勤怠は承認済みのため編集できません" },
-        { status: 400 }
-      );
-    }
+    // ✅ 承認/未承認による制限はしない（仕様変更）
 
     if (resolvedType === "CLOCK_IN" && !photoUrl) {
       return NextResponse.json({ error: "出勤時の写真が必要です" }, { status: 400 });
@@ -98,8 +74,8 @@ export async function POST(request: Request) {
           storeId: targetStoreId,
           type: resolvedType,
           timestamp: new Date(),
-          isCompanion: resolvedType === "CLOCK_IN" ? Boolean(isCompanion) : false
-        }
+          isCompanion: resolvedType === "CLOCK_IN" ? Boolean(isCompanion) : false,
+        },
       });
 
       if (resolvedType === "CLOCK_IN" && photoUrl) {
@@ -108,8 +84,8 @@ export async function POST(request: Request) {
             attendanceId: created.id,
             storeId: targetStoreId,
             staffId: staff.id,
-            photoUrl
-          }
+            photoUrl,
+          },
         });
       }
 
