@@ -173,11 +173,74 @@ async function updateAttendance(formData: FormData) {
   if (!timestamp || typeof timestamp !== "string") {
     throw new Error("日時を指定してください");
   }
+  // ✅ datetime-local を JST として解釈（Vercel UTCズレ防止）
+  const parsed = new Date(`${timestamp}:00+09:00`);
 
   await prisma.attendance.update({
     where: { id: attendanceId },
-    data: { timestamp: new Date(timestamp), isCompanion: Boolean(isCompanion) }
+    data: { timestamp: parsed, isCompanion: isCompanion === "on" }
   });
+
+  revalidatePath("/dashboard/attendance");
+}
+
+async function upsertClockEvent(formData: FormData) {
+  "use server";
+  const session = await getCurrentSession();
+
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) {
+    throw new Error("Unauthorized");
+  }
+
+  const attendanceId = formData.get("attendanceId");
+  const staffId = formData.get("staffId");
+  const type = formData.get("type");
+  const timestamp = formData.get("timestamp");
+  const isCompanion = formData.get("isCompanion");
+
+  if (!staffId || typeof staffId !== "string") throw new Error("スタッフIDが不明です");
+  if (!type || typeof type !== "string") throw new Error("種別が不明です");
+  if (!timestamp || typeof timestamp !== "string") throw new Error("日時を指定してください");
+
+  if (!["CLOCK_IN", "CLOCK_OUT"].includes(type)) {
+    throw new Error("出勤/退勤のみ編集可能です");
+  }
+
+  const defaultStore = await getOrCreateDefaultStore();
+  const storeId = session.user.storeId ?? defaultStore.id;
+
+  // ✅ 対象スタッフが同じ店舗か確認（事故防止）
+  const staff = await prisma.user.findFirst({
+    where: { id: staffId, storeId }
+  });
+  if (!staff) throw new Error("対象スタッフが見つかりません");
+
+  // ✅ datetime-local を JST として解釈
+  const parsed = new Date(`${timestamp}:00+09:00`);
+  const companion = isCompanion === "on";
+
+  const idStr = typeof attendanceId === "string" ? attendanceId : "";
+  const shouldCreate = !idStr || idStr.startsWith("new-");
+
+  if (shouldCreate) {
+    await prisma.attendance.create({
+      data: {
+        storeId,
+        userId: staffId,
+        type: type as AttendanceRecord["type"],
+        timestamp: parsed,
+        isCompanion: companion
+      }
+    });
+  } else {
+    await prisma.attendance.update({
+      where: { id: idStr },
+      data: {
+        timestamp: parsed,
+        isCompanion: companion
+      }
+    });
+  }
 
   revalidatePath("/dashboard/attendance");
 }
@@ -530,6 +593,90 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                       <details className="rounded-lg border border-slate-800/60 bg-black/40 p-3">
                         <summary className="cursor-pointer text-xs text-slate-400">詳細を開く（個別の打刻・休憩・同伴編集）</summary>
                         <div className="mt-3 space-y-3">
+                          const clockInRecord = group.records.find((r) => r.type === "CLOCK_IN") ?? null;
+const clockOutRecord = [...group.records].reverse().find((r) => r.type === "CLOCK_OUT") ?? null;
+
+<div className="space-y-2 rounded-md border border-slate-800/70 bg-slate-950/50 p-3">
+  <p className="text-xs text-slate-400">出勤（CLOCK_IN）</p>
+  <form action={upsertClockEvent} className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
+    <input
+      type="hidden"
+      name="attendanceId"
+      value={clockInRecord ? clockInRecord.id : "new-CLOCK_IN"}
+    />
+    <input type="hidden" name="staffId" value={staffId} />
+    <input type="hidden" name="type" value="CLOCK_IN" />
+
+    <div className="space-y-1">
+      <Label className="text-xs text-slate-400">時刻</Label>
+      <Input
+        type="datetime-local"
+        name="timestamp"
+        required
+        defaultValue={
+          clockInRecord ? format(toJst(clockInRecord.timestamp), "yyyy-MM-dd'T'HH:mm") : ""
+        }
+        className="md:w-64"
+      />
+    </div>
+
+    <div className="flex items-center gap-2 pt-5 text-xs text-slate-200">
+      <input
+        type="checkbox"
+        id={`clockin-companion-${staffId}`}
+        name="isCompanion"
+        defaultChecked={clockInRecord?.isCompanion ?? false}
+        className="h-4 w-4 rounded border border-slate-700 bg-black text-pink-400 focus-visible:outline-none"
+      />
+      <Label htmlFor={`clockin-companion-${staffId}`}>同伴</Label>
+    </div>
+
+    <Button type="submit" size="sm" variant="secondary" className="md:mt-5">
+      更新
+    </Button>
+  </form>
+</div>
+
+<div className="space-y-2 rounded-md border border-slate-800/70 bg-slate-950/50 p-3">
+  <p className="text-xs text-slate-400">退勤（CLOCK_OUT）</p>
+  <form action={upsertClockEvent} className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
+    <input
+      type="hidden"
+      name="attendanceId"
+      value={clockOutRecord ? clockOutRecord.id : "new-CLOCK_OUT"}
+    />
+    <input type="hidden" name="staffId" value={staffId} />
+    <input type="hidden" name="type" value="CLOCK_OUT" />
+
+    <div className="space-y-1">
+      <Label className="text-xs text-slate-400">時刻</Label>
+      <Input
+        type="datetime-local"
+        name="timestamp"
+        required
+        defaultValue={
+          clockOutRecord ? format(toJst(clockOutRecord.timestamp), "yyyy-MM-dd'T'HH:mm") : ""
+        }
+        className="md:w-64"
+      />
+    </div>
+
+    <div className="flex items-center gap-2 pt-5 text-xs text-slate-200">
+      <input
+        type="checkbox"
+        id={`clockout-companion-${staffId}`}
+        name="isCompanion"
+        defaultChecked={clockOutRecord?.isCompanion ?? false}
+        className="h-4 w-4 rounded border border-slate-700 bg-black text-pink-400 focus-visible:outline-none"
+      />
+      <Label htmlFor={`clockout-companion-${staffId}`}>同伴</Label>
+    </div>
+
+    <Button type="submit" size="sm" variant="secondary" className="md:mt-5">
+      更新
+    </Button>
+  </form>
+</div>
                           {group.records.map((attendance) => {
                             const jstTimestamp = toJst(attendance.timestamp);
 
