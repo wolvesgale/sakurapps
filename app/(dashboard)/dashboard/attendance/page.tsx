@@ -29,8 +29,6 @@ import {
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 
 type SearchParams = {
   month?: string;
@@ -49,10 +47,6 @@ type ApprovalState = {
   approvedById: string | null;
 };
 
-/**
- * ✅ lib/auth の exported 関数名揺れに強い互換取得
- * - named import を避けて TS の「export が無い」で落ちるのを防ぐ
- */
 type ServerUser = Record<string, unknown> & {
   id?: string;
   userId?: string;
@@ -80,14 +74,12 @@ async function getServerUserCompat(): Promise<ServerUser | null> {
     for (const fn of candidates) {
       const res = await Promise.resolve(fn());
 
-      // NextAuthの auth() 系: { user: {...} } を想定
       if (isRecord(res) && "user" in res) {
         const u = (res as Record<string, unknown>)["user"];
         if (isRecord(u)) return u as ServerUser;
         return null;
       }
 
-      // 直接 user オブジェクトが返る系
       if (isRecord(res)) return res as ServerUser;
     }
 
@@ -167,12 +159,12 @@ async function updateApprovalAction(formData: FormData) {
   const user = await getServerUserCompat();
   if (!user) redirect("/login");
 
-const userId =
-  typeof user?.id === "string"
-    ? user.id
-    : typeof user?.userId === "string"
-      ? user.userId
-      : undefined;
+  const userId =
+    typeof user?.id === "string"
+      ? user.id
+      : typeof user?.userId === "string"
+        ? user.userId
+        : undefined;
   if (!userId) redirect("/login");
 
   const store = await getOrCreateDefaultStore();
@@ -187,29 +179,6 @@ const userId =
     date,
     approved,
     approverId: userId,
-  });
-
-  revalidatePath("/dashboard/attendance");
-}
-
-async function updateAttendanceMetaAction(formData: FormData) {
-  "use server";
-
-  const user = await getServerUserCompat();
-  if (!user) redirect("/login");
-
-  const attendanceId = String(formData.get("attendanceId") ?? "");
-  const memo = String(formData.get("memo") ?? "");
-  const isCompanion = String(formData.get("isCompanion") ?? "") === "on";
-
-  if (!attendanceId) return;
-
-  await prisma.attendance.update({
-    where: { id: attendanceId },
-    data: {
-      memo: memo || null,
-      isCompanion,
-    },
   });
 
   revalidatePath("/dashboard/attendance");
@@ -526,42 +495,6 @@ export default async function AttendancePage({
                                       <p className="mt-2 text-xs text-slate-500">種別</p>
                                       <p className="text-sm">{attendance.type}</p>
                                     </div>
-
-                                    <form action={updateAttendanceMetaAction} className="grid gap-2">
-                                      <input
-                                        type="hidden"
-                                        name="attendanceId"
-                                        value={attendance.id}
-                                      />
-
-                                      <div className="grid gap-1">
-                                        <Label htmlFor={`memo-${attendance.id}`}>メモ</Label>
-                                        <Textarea
-                                          id={`memo-${attendance.id}`}
-                                          name="memo"
-                                          defaultValue={attendance.memo ?? ""}
-                                          rows={2}
-                                        />
-                                      </div>
-
-                                      <div className="flex items-center gap-2">
-                                        <Switch
-                                          id={`companion-${attendance.id}`}
-                                          name="isCompanion"
-                                          defaultChecked={attendance.isCompanion ?? false}
-                                        />
-                                        <Label htmlFor={`companion-${attendance.id}`}>同伴</Label>
-                                      </div>
-
-                                      <Button
-                                        type="submit"
-                                        size="sm"
-                                        variant="secondary"
-                                        className="md:mt-5"
-                                      >
-                                        更新
-                                      </Button>
-                                    </form>
                                   </div>
                                 );
                               })}
