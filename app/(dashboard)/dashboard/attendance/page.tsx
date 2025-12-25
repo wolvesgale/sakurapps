@@ -589,94 +589,97 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                           </div>
                         </div>
                       ) : null}
+<details className="rounded-lg border border-slate-800/60 bg-black/40 p-3">
+  <summary className="cursor-pointer text-xs text-slate-400">
+    詳細を開く（個別の打刻・休憩・同伴編集）
+  </summary>
 
-                      <details className="rounded-lg border border-slate-800/60 bg-black/40 p-3">
-                        <summary className="cursor-pointer text-xs text-slate-400">詳細を開く（個別の打刻・休憩・同伴編集）</summary>
-                        <div className="mt-3 space-y-3">
-                          const clockInRecord = group.records.find((r) => r.type === "CLOCK_IN") ?? null;
-const clockOutRecord = [...group.records].reverse().find((r) => r.type === "CLOCK_OUT") ?? null;
+  {(() => {
+    const clockInRecord = group.records.find((r) => r.type === "CLOCK_IN") ?? null;
+    const clockOutRecord = [...group.records].reverse().find((r) => r.type === "CLOCK_OUT") ?? null;
 
-<div className="space-y-2 rounded-md border border-slate-800/70 bg-slate-950/50 p-3">
-  <p className="text-xs text-slate-400">出勤（CLOCK_IN）</p>
-  <form action={upsertClockEvent} className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
-    <input
-      type="hidden"
-      name="attendanceId"
-      value={clockInRecord ? clockInRecord.id : "new-CLOCK_IN"}
-    />
-    <input type="hidden" name="staffId" value={staffId} />
-    <input type="hidden" name="type" value="CLOCK_IN" />
+    return (
+      <div className="mt-3 space-y-3">
+        {/* 出勤（なければ作成） */}
+        <div className="space-y-2 rounded-md border border-slate-800/70 bg-slate-950/50 p-3">
+          <p className="text-xs text-slate-400">出勤（CLOCK_IN）</p>
+          <form action={upsertClockEvent} className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
+            <input
+              type="hidden"
+              name="attendanceId"
+              value={clockInRecord ? clockInRecord.id : "new-CLOCK_IN"}
+            />
+            <input type="hidden" name="staffId" value={staffId} />
+            <input type="hidden" name="type" value="CLOCK_IN" />
 
-    <div className="space-y-1">
-      <Label className="text-xs text-slate-400">時刻</Label>
-      <Input
-        type="datetime-local"
-        name="timestamp"
-        required
-        defaultValue={
-          clockInRecord ? format(toJst(clockInRecord.timestamp), "yyyy-MM-dd'T'HH:mm") : ""
-        }
-        className="md:w-64"
-      />
-    </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-slate-400">時刻</Label>
+              <Input
+                type="datetime-local"
+                name="timestamp"
+                required
+                defaultValue={clockInRecord ? format(toJst(clockInRecord.timestamp), "yyyy-MM-dd'T'HH:mm") : ""}
+                className="md:w-64"
+              />
+            </div>
 
-    <div className="flex items-center gap-2 pt-5 text-xs text-slate-200">
-      <input
-        type="checkbox"
-        id={`clockin-companion-${staffId}`}
-        name="isCompanion"
-        defaultChecked={clockInRecord?.isCompanion ?? false}
-        className="h-4 w-4 rounded border border-slate-700 bg-black text-pink-400 focus-visible:outline-none"
-      />
-      <Label htmlFor={`clockin-companion-${staffId}`}>同伴</Label>
-    </div>
+            <div className="flex items-center gap-2 pt-5 text-xs text-slate-200">
+              <input
+                type="checkbox"
+                id={`clockin-companion-${staffId}`}
+                name="isCompanion"
+                defaultChecked={clockInRecord?.isCompanion ?? false}
+                className="h-4 w-4 rounded border border-slate-700 bg-black text-pink-400 focus-visible:outline-none"
+              />
+              <Label htmlFor={`clockin-companion-${staffId}`}>同伴</Label>
+            </div>
 
-    <Button type="submit" size="sm" variant="secondary" className="md:mt-5">
-      更新
-    </Button>
-  </form>
-</div>
+            <Button type="submit" size="sm" variant="secondary" className="md:mt-5">
+              更新
+            </Button>
+          </form>
+        </div>
 
-<div className="space-y-2 rounded-md border border-slate-800/70 bg-slate-950/50 p-3">
-  <p className="text-xs text-slate-400">退勤（CLOCK_OUT）</p>
-  <form action={upsertClockEvent} className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
-    <input
-      type="hidden"
-      name="attendanceId"
-      value={clockOutRecord ? clockOutRecord.id : "new-CLOCK_OUT"}
-    />
-    <input type="hidden" name="staffId" value={staffId} />
-    <input type="hidden" name="type" value="CLOCK_OUT" />
+        {/* 退勤（なければ作成） */}
+        <div className="space-y-2 rounded-md border border-slate-800/70 bg-slate-950/50 p-3">
+          <p className="text-xs text-slate-400">退勤（CLOCK_OUT）</p>
+          <form action={upsertClockEvent} className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
+            <input
+              type="hidden"
+              name="attendanceId"
+              value={clockOutRecord ? clockOutRecord.id : "new-CLOCK_OUT"}
+            />
+            <input type="hidden" name="staffId" value={staffId} />
+            <input type="hidden" name="type" value="CLOCK_OUT" />
 
-    <div className="space-y-1">
-      <Label className="text-xs text-slate-400">時刻</Label>
-      <Input
-        type="datetime-local"
-        name="timestamp"
-        required
-        defaultValue={
-          clockOutRecord ? format(toJst(clockOutRecord.timestamp), "yyyy-MM-dd'T'HH:mm") : ""
-        }
-        className="md:w-64"
-      />
-    </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-slate-400">時刻</Label>
+              <Input
+                type="datetime-local"
+                name="timestamp"
+                required
+                defaultValue={clockOutRecord ? format(toJst(clockOutRecord.timestamp), "yyyy-MM-dd'T'HH:mm") : ""}
+                className="md:w-64"
+              />
+            </div>
 
-    <div className="flex items-center gap-2 pt-5 text-xs text-slate-200">
-      <input
-        type="checkbox"
-        id={`clockout-companion-${staffId}`}
-        name="isCompanion"
-        defaultChecked={clockOutRecord?.isCompanion ?? false}
-        className="h-4 w-4 rounded border border-slate-700 bg-black text-pink-400 focus-visible:outline-none"
-      />
-      <Label htmlFor={`clockout-companion-${staffId}`}>同伴</Label>
-    </div>
+            <div className="flex items-center gap-2 pt-5 text-xs text-slate-200">
+              <input
+                type="checkbox"
+                id={`clockout-companion-${staffId}`}
+                name="isCompanion"
+                defaultChecked={clockOutRecord?.isCompanion ?? false}
+                className="h-4 w-4 rounded border border-slate-700 bg-black text-pink-400 focus-visible:outline-none"
+              />
+              <Label htmlFor={`clockout-companion-${staffId}`}>同伴</Label>
+            </div>
 
-    <Button type="submit" size="sm" variant="secondary" className="md:mt-5">
-      更新
-    </Button>
-  </form>
-</div>
+            <Button type="submit" size="sm" variant="secondary" className="md:mt-5">
+              更新
+            </Button>
+          </form>
+        </div>
+
                           {group.records.map((attendance) => {
                             const jstTimestamp = toJst(attendance.timestamp);
 
