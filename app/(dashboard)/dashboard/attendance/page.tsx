@@ -305,7 +305,7 @@ export default async function AttendancePage({
               </Button>
             </Link>
             <Link href="/dashboard">
-              <Button variant="outline" size="sm">
+              <Button variant="ghost" size="sm">
                 ダッシュボードへ戻る
               </Button>
             </Link>
@@ -391,7 +391,7 @@ export default async function AttendancePage({
                     />
                     <Button
                       type="submit"
-                      variant={approvalByDate[selectedDayKey]?.isApproved ? "outline" : "default"}
+                      variant={approvalByDate[selectedDayKey]?.isApproved ? "secondary" : "default"}
                     >
                       {approvalByDate[selectedDayKey]?.isApproved ? "承認取消" : "承認"}
                     </Button>
