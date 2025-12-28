@@ -475,16 +475,21 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const globalAny = globalThis as any;
       if (!globalAny.__att_workKeyByUser) globalAny.__att_workKeyByUser = {};
-      const workKeyByUser: Record<string, string | undefined> = globalAny.__att_workKeyByUser;
+// ✅ 重要：このmapは「このリクエストの中だけ」で保持する（global禁止）
+const workKeyByUser: Record<string, string | undefined> = {};
 
-      if (record.type === "CLOCK_IN") {
-        workKeyByUser[record.userId] = jstDayKeyFromDate(record.timestamp);
-      }
+const attendanceByDate = attendances.reduce<Record<string, AttendanceRecord[]>>((acc, record) => {
+  if (record.type === "CLOCK_IN") {
+    workKeyByUser[record.userId] = jstDayKeyFromDate(record.timestamp);
+  }
 
-      const key = workKeyByUser[record.userId] ?? jstDayKeyFromDate(record.timestamp);
-      acc[key] = acc[key] ? [...acc[key], record] : [record];
-      return acc;
-    }, {});
+  // CLOCK_OUT/休憩は「直近のCLOCK_IN日」に寄せる（なければ自分の日付）
+  const key = workKeyByUser[record.userId] ?? jstDayKeyFromDate(record.timestamp);
+
+  acc[key] = acc[key] ? [...acc[key], record] : [record];
+  return acc;
+}, {});
+
 
     // approvals も JST日付キーで
     const approvalByDate = approvals.reduce<Record<string, boolean>>((acc, approval) => {
