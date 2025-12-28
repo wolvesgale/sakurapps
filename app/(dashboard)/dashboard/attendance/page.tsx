@@ -93,60 +93,82 @@ type DaySummary = {
   workingMinutes: number;
 };
 
+const QUARTER_MIN = 15;
+
+function ceilToQuarter(d: Date) {
+  const ms = d.getTime();
+  const q = QUARTER_MIN * 60 * 1000;
+  return new Date(Math.ceil(ms / q) * q);
+}
+
+function floorToQuarter(d: Date) {
+  const ms = d.getTime();
+  const q = QUARTER_MIN * 60 * 1000;
+  return new Date(Math.floor(ms / q) * q);
+}
+
 function buildDaySummary(records: AttendanceRecord[]): DaySummary {
   if (records.length === 0) return { clockInJst: null, clockOutJst: null, workingMinutes: 0 };
 
   const events = records
-    .map((record) => ({ ...record, jst: toJstWallClockDate(record.timestamp) }))
+    .map((r) => ({ ...r, jst: toJstWallClockDate(r.timestamp) }))
     .sort((a, b) => a.jst.getTime() - b.jst.getTime());
 
-  const clockInEvent = events.find((e) => e.type === "CLOCK_IN");
-  const clockOutEvent = [...events].reverse().find((e) => e.type === "CLOCK_OUT");
+  const clockInEvent = events.find((e) => e.type === "CLOCK_IN") ?? null;
+  const clockOutEvent = [...events].reverse().find((e) => e.type === "CLOCK_OUT") ?? null;
 
-  let workingMinutes = 0;
-  let currentStart: Date | null = null;
-  let inBreak = false;
+  if (!clockInEvent) return { clockInJst: null, clockOutJst: null, workingMinutes: 0 };
 
-  for (const event of events) {
-    switch (event.type) {
-      case "CLOCK_IN": {
-        currentStart = event.jst;
-        inBreak = false;
-        break;
-      }
-      case "BREAK_START": {
-        if (currentStart && !inBreak) {
-          workingMinutes += differenceInMinutes(event.jst, currentStart);
-          currentStart = null;
-        }
-        inBreak = true;
-        break;
-      }
-      case "BREAK_END": {
-        if (inBreak) {
-          currentStart = event.jst;
-          inBreak = false;
-        }
-        break;
-      }
-      case "CLOCK_OUT": {
-        if (currentStart && !inBreak) {
-          workingMinutes += differenceInMinutes(event.jst, currentStart);
-          currentStart = null;
-        }
-        break;
-      }
-      default:
-        break;
+  // 勤務区間（退勤が無い場合は「今」まで）
+  const nowJst = toJstWallClockDate(new Date());
+  const rawStart = clockInEvent.jst;
+  const rawEnd = clockOutEvent?.jst ?? nowJst;
+
+  // ✅ 15分切り上げ（要望に合わせて IN/OUT は切り上げ）
+  const start = ceilToQuarter(rawStart);
+  const end = ceilToQuarter(rawEnd);
+
+  // ✅ 休憩は勤務区間内だけ集計（外側は無視）
+  // 休憩の丸め方は「開始は切り下げ、終了は切り上げ」にしておくと、
+  // 休憩が短くなり過ぎる事故を防げる（好みで調整可）
+  let breakMinutes = 0;
+  let breakStart: Date | null = null;
+
+  for (const e of events) {
+    const t = e.jst;
+
+    // 勤務区間外は無視
+    if (t.getTime() < rawStart.getTime() || t.getTime() > rawEnd.getTime()) continue;
+
+    if (e.type === "BREAK_START") {
+      breakStart = t;
+    }
+    if (e.type === "BREAK_END" && breakStart) {
+      const bs = floorToQuarter(breakStart);
+      const be = ceilToQuarter(t);
+      const mins = Math.max(0, differenceInMinutes(be, bs));
+      breakMinutes += mins;
+      breakStart = null;
     }
   }
 
+  // BREAK_STARTだけあってBREAK_ENDが無い場合（休憩中で終わった等）
+  if (breakStart) {
+    const bs = floorToQuarter(breakStart);
+    const be = ceilToQuarter(rawEnd);
+    breakMinutes += Math.max(0, differenceInMinutes(be, bs));
+  }
+
+  const baseMinutes = Math.max(0, differenceInMinutes(end, start));
+  const workingMinutes = Math.max(0, baseMinutes - breakMinutes);
+
   return {
-    clockInJst: clockInEvent?.jst ?? null,
+    clockInJst: clockInEvent.jst,
     clockOutJst: clockOutEvent?.jst ?? null,
     workingMinutes,
   };
 }
+
 
 function isYyyyMm(value: string | null | undefined) {
   return Boolean(value && /^\d{4}-\d{2}$/.test(value));
