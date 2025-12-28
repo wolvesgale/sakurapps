@@ -18,55 +18,68 @@ export async function verifyTerminalAccess(
 }
 
 export async function getActiveStaffForToday(storeId: string) {
+  // JST日付の開始と終了（UTC）
   const dayStart = startOfDay(new Date());
   const dayEnd = addDays(dayStart, 1);
 
+  // 当日の全勤怠レコードを取得（昇順）
   const attendances = await prisma.attendance.findMany({
     where: {
       storeId,
-      timestamp: { gte: dayStart, lt: dayEnd }
+      timestamp: { gte: dayStart, lt: dayEnd },
     },
     include: { user: true },
-    orderBy: { timestamp: "asc" }
+    orderBy: { timestamp: "asc" },
   });
 
-  const activeMap = new Map<
-    string,
-    {
-      userId: string;
-      displayName: string;
-      firstClockIn: Date | null;
-      lastType: string | null;
-      isCompanion: boolean;
-    }
-  >();
-
-  for (const attendance of attendances) {
-    const current = activeMap.get(attendance.userId) ?? {
-      userId: attendance.userId,
-      displayName: attendance.user.displayName,
-      firstClockIn: null,
-      lastType: null,
-      isCompanion: false
-    };
-
-    if (attendance.type === "CLOCK_IN" && !current.firstClockIn) {
-      current.firstClockIn = attendance.timestamp;
-      current.isCompanion = Boolean(attendance.isCompanion);
-    }
-
-    current.lastType = attendance.type;
-    activeMap.set(attendance.userId, current);
+  // ユーザーごとのイベント配列を作る
+  const eventsByUser: Record<string, typeof attendances> = {};
+  for (const a of attendances) {
+    if (!eventsByUser[a.userId]) eventsByUser[a.userId] = [];
+    eventsByUser[a.userId].push(a);
   }
 
-  return Array.from(activeMap.values())
-    .filter((record) => record.lastType && record.lastType !== "CLOCK_OUT")
-    .map((record) => ({
-      id: record.userId,
-      displayName: record.displayName,
-      clockInAt: record.firstClockIn,
-      isCompanion: record.isCompanion
-    }));
+  const result: {
+    id: string;
+    displayName: string;
+    clockInAt: Date | null;
+    isCompanion: boolean;
+  }[] = [];
+
+  for (const [userId, events] of Object.entries(eventsByUser)) {
+    // 最初のCLOCK_INの時刻と同伴フラグを拾う
+    const firstClockIn = events.find((e) => e.type === "CLOCK_IN")?.timestamp ?? null;
+    const isCompanion = events.find((e) => e.type === "CLOCK_IN")?.isCompanion ?? false;
+
+    // 最後のイベント種別
+    const lastType = events[events.length - 1]?.type ?? null;
+
+    // CLOCK_INとCLOCK_OUTの最後の位置を比較し、「出勤後に退勤があるか」を調べる
+    const lastClockInIndex = events.map((e) => e.type).lastIndexOf("CLOCK_IN");
+    const lastClockOutIndex = events.map((e) => e.type).lastIndexOf("CLOCK_OUT");
+    const hasClockOutAfterClockIn = lastClockOutIndex > lastClockInIndex;
+
+    // 出勤中と判断する条件：
+    // 1. 最後のイベントがCLOCK_OUTではない
+    // 2. かつ最後のCLOCK_INの後にCLOCK_OUTが存在しない
+    if (
+      lastType &&
+      lastType !== "CLOCK_OUT" &&
+      !hasClockOutAfterClockIn
+    ) {
+      const displayName = events[0]?.user.displayName ?? "unknown";
+      result.push({
+        id: userId,
+        displayName,
+        clockInAt: firstClockIn,
+        isCompanion: Boolean(isCompanion),
+      });
+    }
+  }
+
+  // 表示順（名前順）を整える
+  result.sort((a, b) => a.displayName.localeCompare(b.displayName, "ja"));
+  return result;
 }
 // JST基準の「営業日」範囲を返す
 // - startHour: 営業開始（例: 18）
