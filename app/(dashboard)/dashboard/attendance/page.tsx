@@ -465,30 +465,27 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
 
     const calendarDays = eachDayOfInterval({ start: monthStartJst, end: monthEndJst });
 
-    /**
-     * ✅ 重要：勤務実績は「出勤（CLOCK_IN）の日付」にまとめる
-     * - 夜勤で退勤が翌日でも、出勤日（例：25日）に紐づける
-     */
-    const attendanceByDate = attendances.reduce<Record<string, AttendanceRecord[]>>((acc, record) => {
-      // userごとに直近のCLOCK_IN日付キーを保持
-      // （月内をtimestamp昇順で走査しているので安定）
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const globalAny = globalThis as any;
-      if (!globalAny.__att_workKeyByUser) globalAny.__att_workKeyByUser = {};
-// ✅ 重要：このmapは「このリクエストの中だけ」で保持する（global禁止）
+/**
+ * ✅ 重要：勤務実績は「出勤（CLOCK_IN）の日付」にまとめる
+ * - 夜勤で退勤が翌日でも、出勤日（例：25日）に紐づける
+ * - globalThis は使わない（Vercelでリクエスト跨ぎ汚染が起きるため）
+ */
 const workKeyByUser: Record<string, string | undefined> = {};
 
 const attendanceByDate = attendances.reduce<Record<string, AttendanceRecord[]>>((acc, record) => {
+  // CLOCK_IN が来たら、その日付キーを「勤務日」として保持
   if (record.type === "CLOCK_IN") {
     workKeyByUser[record.userId] = jstDayKeyFromDate(record.timestamp);
   }
 
-  // CLOCK_OUT/休憩は「直近のCLOCK_IN日」に寄せる（なければ自分の日付）
+  // それ以外（CLOCK_OUT / BREAK）は「直近のCLOCK_IN日」に寄せる
+  // もしCLOCK_INが無い場合は自分の日付にフォールバック
   const key = workKeyByUser[record.userId] ?? jstDayKeyFromDate(record.timestamp);
 
   acc[key] = acc[key] ? [...acc[key], record] : [record];
   return acc;
 }, {});
+
 
 
     // approvals も JST日付キーで
