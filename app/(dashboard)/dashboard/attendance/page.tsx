@@ -1,17 +1,21 @@
+// app/(dashboard)/dashboard/attendance/page.tsx
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import {
+  addDays,
   differenceInMinutes,
+  eachDayOfInterval,
   format,
   isValid,
+  startOfDay,
 } from "date-fns";
 import { ja } from "date-fns/locale";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { getOrCreateDefaultStore } from "@/lib/store";
-import { updateDayApproval } from "@/lib/attendance";
+import { getMonthlyAttendanceSummary, updateDayApproval } from "@/lib/attendance";
 import { pruneOldAttendancePhotos } from "@/lib/attendance-photo";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,28 +32,9 @@ const attendanceLabels: Record<string, string> = {
 };
 
 const TZ = "Asia/Tokyo";
-
-/**
- * Date を JST の「見かけの日時」に変換して Date を作り直す（date-fns の format 等で扱いやすくする）
- * ※ Intl timezone を使っているので Vercel(UTC) でも JST として扱える
- */
 const toJst = (date: Date) => new Date(date.toLocaleString("en-US", { timeZone: TZ }));
 
-/** JST の日付キー（yyyy-MM-dd）を返す */
-const toJstDateKey = (date: Date) => format(toJst(date), "yyyy-MM-dd");
-
-/** yyyy-MM-dd を JST の「その日の 12:00」Date にする（曜日表示が安定） */
-const dateKeyToJstNoon = (dateKey: string) => toJst(new Date(`${dateKey}T12:00:00+09:00`));
-
-/** yyyy-MM のキー */
-const isMonthKey = (v: string) => /^\d{4}-\d{2}$/.test(v);
-/** yyyy-MM-dd のキー */
-const isDateKey = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
-
-type AttendanceRecord = Prisma.AttendanceGetPayload<{
-  include: { user: true; approvedBy: true; photo: true };
-}>;
-
+type AttendanceRecord = Prisma.AttendanceGetPayload<{ include: { user: true; approvedBy: true } }>;
 type AttendanceApprovalRecord = Prisma.AttendanceApprovalGetPayload<Record<string, never>>;
 
 type AttendancePageProps = {
@@ -114,71 +99,45 @@ function buildDaySummary(records: AttendanceRecord[]): DaySummary {
     }
   }
 
-  return {
-    clockInJst: clockInEvent?.jst ?? null,
-    clockOutJst: clockOutEvent?.jst ?? null,
-    workingMinutes,
-  };
+  return { clockInJst: clockInEvent?.jst ?? null, clockOutJst: clockOutEvent?.jst ?? null, workingMinutes };
 }
 
-function calcMonthlyTotalFromAttendances(attendances: AttendanceRecord[]) {
-  // key: yyyy-MM-dd + userId
-  const byDayUser = new Map<string, AttendanceRecord[]>();
-  for (const a of attendances) {
-    const dayKey = toJstDateKey(a.timestamp);
-    const key = `${dayKey}__${a.userId}`;
-    const arr = byDayUser.get(key) ?? [];
-    arr.push(a);
-    byDayUser.set(key, arr);
-  }
-
-  let totalMinutes = 0;
-  for (const records of byDayUser.values()) {
-    totalMinutes += buildDaySummary(records).workingMinutes;
-  }
-
-  const hours = Math.floor(totalMinutes / 60);
-  const remainderMinutes = totalMinutes % 60;
-
-  return { totalMinutes, hours, remainderMinutes };
+function isYyyyMm(value: string | null | undefined) {
+  return Boolean(value && /^\d{4}-\d{2}$/.test(value));
 }
 
-function getDaysInMonth(year: number, month1to12: number) {
-  // UTCで日数だけ算出（タイムゾーン影響を受けない）
-  return new Date(Date.UTC(year, month1to12, 0)).getUTCDate();
+function isYyyyMmDd(value: string | null | undefined) {
+  return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
 }
 
-function buildDateKeysOfMonth(monthKey: string) {
-  const [yStr, mStr] = monthKey.split("-");
-  const year = Number(yStr);
-  const month = Number(mStr);
-  const days = getDaysInMonth(year, month);
+function nextMonthYyyyMm(yyyyMm: string) {
+  const [y, m] = yyyyMm.split("-").map((v) => Number(v));
+  const d = new Date(Date.UTC(y, m - 1, 1));
+  d.setUTCMonth(d.getUTCMonth() + 1);
+  const ny = d.getUTCFullYear();
+  const nm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  return `${ny}-${nm}`;
+}
 
-  const keys: string[] = [];
-  for (let d = 1; d <= days; d++) {
-    const dd = String(d).padStart(2, "0");
-    keys.push(`${monthKey}-${dd}`);
-  }
-  return keys;
+function parseJstMonthRangeUtc(monthYyyyMm: string) {
+  // JST月初(00:00+09:00) を UTC Date にする
+  const from = new Date(`${monthYyyyMm}-01T00:00:00+09:00`);
+  const to = new Date(`${nextMonthYyyyMm(monthYyyyMm)}-01T00:00:00+09:00`); // 翌月月初(JST)
+  return { from, to };
+}
+
+function parseSelectedDayJstStart(dayYmd: string) {
+  // JSTの 00:00 を “JSTとしての壁時計Date” に寄せる
+  const baseUtc = new Date(`${dayYmd}T00:00:00+09:00`);
+  return startOfDay(toJst(baseUtc));
 }
 
 async function safeFetchAttendances(params: Prisma.AttendanceFindManyArgs): Promise<AttendanceRecord[]> {
   try {
     return (await prisma.attendance.findMany(params)) as AttendanceRecord[];
   } catch (error) {
-    console.error("[attendance] primary fetch failed, retrying without photo include", error);
-    const fallbackParams: Prisma.AttendanceFindManyArgs = { ...params };
-    if (fallbackParams.include) {
-      const restInclude = { ...(fallbackParams.include as Record<string, unknown>) };
-      delete (restInclude as Record<string, unknown>).photo;
-      fallbackParams.include = restInclude as Prisma.AttendanceFindManyArgs["include"];
-    }
-    try {
-      return (await prisma.attendance.findMany(fallbackParams)) as AttendanceRecord[];
-    } catch (secondaryError) {
-      console.error("[attendance] fallback fetch failed", secondaryError);
-      return [] as AttendanceRecord[];
-    }
+    console.error("[attendance] fetch failed", error);
+    return [] as AttendanceRecord[];
   }
 }
 
@@ -191,27 +150,20 @@ async function safeFetchApprovals(params: Prisma.AttendanceApprovalFindManyArgs)
   }
 }
 
-function getSafeReturnTo(formData: FormData) {
-  const returnTo = formData.get("returnTo");
-  const safeReturnTo =
-    typeof returnTo === "string" && returnTo.startsWith("/dashboard/attendance")
-      ? returnTo
-      : "/dashboard/attendance";
-  return safeReturnTo;
-}
-
 async function deleteAttendance(formData: FormData) {
   "use server";
   const session = await getCurrentSession();
   if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) throw new Error("Unauthorized");
 
   const attendanceId = formData.get("attendanceId");
+  const returnTo = formData.get("returnTo");
+
   if (!attendanceId || typeof attendanceId !== "string") throw new Error("勤怠IDが不明です");
 
   await prisma.attendance.delete({ where: { id: attendanceId } });
 
-  revalidatePath("/dashboard/attendance", "page");
-  redirect(getSafeReturnTo(formData));
+  revalidatePath("/dashboard/attendance");
+  if (typeof returnTo === "string" && returnTo) redirect(returnTo);
 }
 
 async function updateAttendance(formData: FormData) {
@@ -221,20 +173,21 @@ async function updateAttendance(formData: FormData) {
 
   const attendanceId = formData.get("attendanceId");
   const timestamp = formData.get("timestamp");
+  const returnTo = formData.get("returnTo");
 
   if (!attendanceId || typeof attendanceId !== "string") throw new Error("勤怠IDが不明です");
   if (!timestamp || typeof timestamp !== "string") throw new Error("日時を指定してください");
 
-  // datetime-local を JST として解釈（UTCズレ防止）
   const parsed = new Date(`${timestamp}:00+09:00`);
+  if (Number.isNaN(parsed.getTime())) throw new Error("日時の形式が不正です");
 
   await prisma.attendance.update({
     where: { id: attendanceId },
     data: { timestamp: parsed },
   });
 
-  revalidatePath("/dashboard/attendance", "page");
-  redirect(getSafeReturnTo(formData));
+  revalidatePath("/dashboard/attendance");
+  if (typeof returnTo === "string" && returnTo) redirect(returnTo);
 }
 
 async function upsertClockEvent(formData: FormData) {
@@ -247,12 +200,15 @@ async function upsertClockEvent(formData: FormData) {
   const type = formData.get("type");
   const timestamp = formData.get("timestamp");
   const isCompanion = formData.get("isCompanion");
+  const returnTo = formData.get("returnTo");
 
   if (!staffId || typeof staffId !== "string") throw new Error("スタッフIDが不明です");
   if (!type || typeof type !== "string") throw new Error("種別が不明です");
   if (!timestamp || typeof timestamp !== "string") throw new Error("日時を指定してください");
-
   if (!["CLOCK_IN", "CLOCK_OUT"].includes(type)) throw new Error("出勤/退勤のみ編集可能です");
+
+  const parsed = new Date(`${timestamp}:00+09:00`);
+  if (Number.isNaN(parsed.getTime())) throw new Error("日時の形式が不正です");
 
   const defaultStore = await getOrCreateDefaultStore();
   const storeId = session.user.storeId ?? defaultStore.id;
@@ -260,9 +216,7 @@ async function upsertClockEvent(formData: FormData) {
   const staff = await prisma.user.findFirst({ where: { id: staffId, storeId } });
   if (!staff) throw new Error("対象スタッフが見つかりません");
 
-  const parsed = new Date(`${timestamp}:00+09:00`);
-
-  // 同伴は CLOCK_IN のみに適用
+  // ✅ 同伴は CLOCK_IN のみに適用
   const companion = type === "CLOCK_IN" ? isCompanion === "on" : false;
 
   const idStr = typeof attendanceId === "string" ? attendanceId : "";
@@ -285,8 +239,8 @@ async function upsertClockEvent(formData: FormData) {
     });
   }
 
-  revalidatePath("/dashboard/attendance", "page");
-  redirect(getSafeReturnTo(formData));
+  revalidatePath("/dashboard/attendance");
+  if (typeof returnTo === "string" && returnTo) redirect(returnTo);
 }
 
 async function createOwnerAttendance(formData: FormData) {
@@ -298,10 +252,15 @@ async function createOwnerAttendance(formData: FormData) {
   const clockIn = formData.get("clockIn");
   const clockOut = formData.get("clockOut");
   const isCompanion = formData.get("isCompanion");
+  const returnTo = formData.get("returnTo");
 
   if (!staffId || typeof staffId !== "string") throw new Error("スタッフを選択してください");
   if (!clockIn || typeof clockIn !== "string") throw new Error("出勤時刻を指定してください");
   if (!clockOut || typeof clockOut !== "string") throw new Error("退勤時刻を指定してください");
+
+  const inParsed = new Date(`${clockIn}:00+09:00`);
+  const outParsed = new Date(`${clockOut}:00+09:00`);
+  if (Number.isNaN(inParsed.getTime()) || Number.isNaN(outParsed.getTime())) throw new Error("日時の形式が不正です");
 
   const defaultStore = await getOrCreateDefaultStore();
   const storeId = session.user.storeId ?? defaultStore.id;
@@ -309,10 +268,8 @@ async function createOwnerAttendance(formData: FormData) {
   const staff = await prisma.user.findFirst({ where: { id: staffId, storeId } });
   if (!staff) throw new Error("対象スタッフが見つかりません");
 
+  // ✅ 同伴は CLOCK_IN のみに適用
   const companion = isCompanion === "on";
-
-  const inParsed = new Date(`${clockIn}:00+09:00`);
-  const outParsed = new Date(`${clockOut}:00+09:00`);
 
   await prisma.attendance.createMany({
     data: [
@@ -321,8 +278,8 @@ async function createOwnerAttendance(formData: FormData) {
     ],
   });
 
-  revalidatePath("/dashboard/attendance", "page");
-  redirect(getSafeReturnTo(formData));
+  revalidatePath("/dashboard/attendance");
+  if (typeof returnTo === "string" && returnTo) redirect(returnTo);
 }
 
 async function approveDay(formData: FormData) {
@@ -330,23 +287,20 @@ async function approveDay(formData: FormData) {
   const session = await getCurrentSession();
   if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) throw new Error("Unauthorized");
 
-  const dateKey = formData.get("dateKey");
-  if (!dateKey || typeof dateKey !== "string" || !isDateKey(dateKey)) throw new Error("日付が不明です");
+  const dateValue = formData.get("date");
+  const returnTo = formData.get("returnTo");
+  if (!dateValue || typeof dateValue !== "string") throw new Error("日付が不明です");
 
   const defaultStore = await getOrCreateDefaultStore();
-
-  // JSTのその日 00:00 を明示
-  const date = new Date(`${dateKey}T00:00:00+09:00`);
-
   await updateDayApproval({
     storeId: session.user.storeId ?? defaultStore.id,
-    date,
+    date: new Date(dateValue),
     approved: true,
     approverId: session.user.id,
   });
 
-  revalidatePath("/dashboard/attendance", "page");
-  redirect(getSafeReturnTo(formData));
+  revalidatePath("/dashboard/attendance");
+  if (typeof returnTo === "string" && returnTo) redirect(returnTo);
 }
 
 async function unapproveDay(formData: FormData) {
@@ -354,21 +308,20 @@ async function unapproveDay(formData: FormData) {
   const session = await getCurrentSession();
   if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) throw new Error("Unauthorized");
 
-  const dateKey = formData.get("dateKey");
-  if (!dateKey || typeof dateKey !== "string" || !isDateKey(dateKey)) throw new Error("日付が不明です");
+  const dateValue = formData.get("date");
+  const returnTo = formData.get("returnTo");
+  if (!dateValue || typeof dateValue !== "string") throw new Error("日付が不明です");
 
   const defaultStore = await getOrCreateDefaultStore();
-  const date = new Date(`${dateKey}T00:00:00+09:00`);
-
   await updateDayApproval({
     storeId: session.user.storeId ?? defaultStore.id,
-    date,
+    date: new Date(dateValue),
     approved: false,
     approverId: session.user.id,
   });
 
-  revalidatePath("/dashboard/attendance", "page");
-  redirect(getSafeReturnTo(formData));
+  revalidatePath("/dashboard/attendance");
+  if (typeof returnTo === "string" && returnTo) redirect(returnTo);
 }
 
 export default async function AttendancePage({ searchParams }: AttendancePageProps) {
@@ -378,23 +331,20 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
   const defaultStore = await getOrCreateDefaultStore();
   const activeStoreId = session.user.storeId ?? defaultStore.id;
 
+  // 写真のpruneは “ページ表示を壊さない” ように、失敗しても継続
   try {
     await pruneOldAttendancePhotos();
+  } catch (e) {
+    console.warn("[attendance] pruneOldAttendancePhotos skipped", e);
+  }
 
-    // monthKey を決める（yyyy-MM）
+  try {
     const monthParam = searchParams?.month;
-    const monthKey = monthParam && isMonthKey(monthParam) ? monthParam : format(toJst(new Date()), "yyyy-MM");
+    const monthYyyyMm = isYyyyMm(monthParam) ? monthParam! : format(toJst(new Date()), "yyyy-MM");
 
-    // 月の範囲（JST境界を明示：start = monthKey-01T00:00+09, end = nextMonth-01T00:00+09）
-    const [yStr, mStr] = monthKey.split("-");
-    const y = Number(yStr);
-    const m = Number(mStr);
-    const nextY = m === 12 ? y + 1 : y;
-    const nextM = m === 12 ? 1 : m + 1;
-    const nextMonthKey = `${String(nextY).padStart(4, "0")}-${String(nextM).padStart(2, "0")}`;
-
-    const monthStart = new Date(`${monthKey}-01T00:00:00+09:00`);
-    const monthNextStart = new Date(`${nextMonthKey}-01T00:00:00+09:00`);
+    const { from: monthFromUtc, to: monthToUtc } = parseJstMonthRangeUtc(monthYyyyMm);
+    const monthStartJst = startOfDay(toJst(monthFromUtc));
+    const monthEndJst = addDays(startOfDay(toJst(monthToUtc)), -1);
 
     const staffList = await prisma.user.findMany({
       where: { role: { in: ["CAST", "DRIVER"] }, isActive: true, storeId: activeStoreId },
@@ -403,60 +353,66 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
 
     const staffFilterParam = searchParams?.staffId;
     const selectedStaffId =
-      staffFilterParam &&
-      staffFilterParam !== "__all__" &&
-      staffList.some((staff) => staff.id === staffFilterParam)
+      staffFilterParam && staffFilterParam !== "__all__" && staffList.some((staff) => staff.id === staffFilterParam)
         ? staffFilterParam
         : undefined;
 
     const staffSelectValue = selectedStaffId ?? "__all__";
 
-    // 取得（※ selectedStaffId があれば userId で絞る）
     const attendances = await safeFetchAttendances({
       where: {
         storeId: activeStoreId,
-        timestamp: { gte: monthStart, lt: monthNextStart },
+        timestamp: { gte: monthFromUtc, lt: monthToUtc },
         ...(selectedStaffId ? { userId: selectedStaffId } : {}),
       },
-      include: { user: true, approvedBy: true, photo: true },
+      include: { user: true, approvedBy: true }, // ✅ photoは別クエリで取る
       orderBy: { timestamp: "asc" },
     });
+
+    // ✅ 写真は attendanceId で確実に引く
+    const attendanceIds = attendances.map((a) => a.id);
+    const photos = attendanceIds.length
+      ? await prisma.attendancePhoto.findMany({
+          where: { storeId: activeStoreId, attendanceId: { in: attendanceIds } },
+          select: { attendanceId: true, photoUrl: true },
+        })
+      : [];
+
+    const photoByAttendanceId = photos.reduce<Record<string, string>>((acc, p) => {
+      acc[p.attendanceId] = p.photoUrl;
+      return acc;
+    }, {});
 
     const approvals = await safeFetchApprovals({
       where: {
         storeId: activeStoreId,
-        date: { gte: monthStart, lt: monthNextStart },
+        date: { gte: monthFromUtc, lt: monthToUtc },
       },
     });
 
-    // dateKey一覧（yyyy-MM-dd）
-    const calendarDayKeys = buildDateKeysOfMonth(monthKey);
+    const calendarDays = eachDayOfInterval({ start: monthStartJst, end: monthEndJst });
 
-    // 日ごとの勤怠
     const attendanceByDate = attendances.reduce<Record<string, AttendanceRecord[]>>((acc, record) => {
-      const key = toJstDateKey(record.timestamp);
+      const key = format(toJst(record.timestamp), "yyyy-MM-dd"); // ✅ JSTで日付キー化
       acc[key] = acc[key] ? [...acc[key], record] : [record];
       return acc;
     }, {});
 
-    // 日ごとの承認
     const approvalByDate = approvals.reduce<Record<string, boolean>>((acc, approval) => {
-      const key = toJstDateKey(approval.date);
+      const key = format(toJst(approval.date), "yyyy-MM-dd"); // ✅ JSTで日付キー化
       acc[key] = approval.isApproved;
       return acc;
     }, {});
 
-    // 選択日
     const selectedDayParam = searchParams?.day;
-    const selectedDayKey =
-      selectedDayParam && isDateKey(selectedDayParam) ? selectedDayParam : `${monthKey}-01`;
+    const selectedDay =
+      isYyyyMmDd(selectedDayParam) && isValid(new Date(selectedDayParam!))
+        ? parseSelectedDayJstStart(selectedDayParam!)
+        : startOfDay(monthStartJst);
 
-    const selectedDayLabelDate = dateKeyToJstNoon(selectedDayKey);
+    const selectedDayKey = format(selectedDay, "yyyy-MM-dd");
     const selectedDayAttendances = attendanceByDate[selectedDayKey] ?? [];
     const hasSelectedDayRecords = selectedDayAttendances.length > 0;
-
-    // 同じ画面に戻すURL（server actionで使う）
-    const returnTo = `/dashboard/attendance?month=${monthKey}&staffId=${staffSelectValue}&day=${selectedDayKey}`;
 
     const groupedByStaff = selectedDayAttendances.reduce<
       Record<
@@ -467,6 +423,7 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
           isApproved: boolean;
           isOwnerCreated: boolean;
           companion: boolean;
+          clockInPhotoUrl?: string;
         }
       >
     >((acc, record) => {
@@ -476,10 +433,12 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
       const updatedRecords = existing ? [...existing.records, record] : [record];
       const sorted = updatedRecords.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
-      // その日のそのスタッフの記録が “全部写真なし” なら「オーナー作成（写真なし）」扱い（簡易）
-      const isOwnerCreated = sorted.length > 0 && sorted.every((r) => !r.photo);
+      const clockIn = sorted.find((r) => r.type === "CLOCK_IN") ?? null;
+      const clockInPhotoUrl = clockIn ? photoByAttendanceId[clockIn.id] : undefined;
 
-      const clockIn = sorted.find((r) => r.type === "CLOCK_IN");
+      // ✅ CLOCK_INに写真が無い = オーナー作成（写真なし）扱い
+      const isOwnerCreated = Boolean(clockIn) && !clockInPhotoUrl;
+
       const companion = Boolean(clockIn?.isCompanion);
 
       acc[key] = {
@@ -488,18 +447,22 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
         isApproved: sorted.every((r) => Boolean(r.approvedAt)),
         isOwnerCreated,
         companion,
+        clockInPhotoUrl,
       };
       return acc;
     }, {});
 
     const selectedDayApproved =
       approvalByDate[selectedDayKey] ??
-      (selectedDayAttendances.length > 0 && selectedDayAttendances.every((a) => Boolean(a.approvedAt)));
+      (selectedDayAttendances.length > 0 && selectedDayAttendances.every((attendance) => Boolean(attendance.approvedAt)));
 
-    // ✅ 月次合計は「取得済み attendances」から計算（staffId フィルタと必ず一致する）
-    const monthTotal = calcMonthlyTotalFromAttendances(attendances);
+    const monthlySummary = await getMonthlyAttendanceSummary({
+      storeId: activeStoreId,
+      staffId: selectedStaffId,
+      year: Number(format(monthStartJst, "yyyy")),
+      month: Number(format(monthStartJst, "M")),
+    });
 
-    // ✅ 選択キャストの同伴回数（月間）：CLOCK_IN のみカウント
     const monthlyCompanionCount =
       selectedStaffId ? attendances.filter((a) => a.type === "CLOCK_IN" && a.isCompanion).length : 0;
 
@@ -508,14 +471,13 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
         ? "勤務時間合計（全員）"
         : `勤務時間合計（${staffList.find((s) => s.id === staffSelectValue)?.displayName ?? "スタッフ"}）`;
 
-    // ✅ ネイティブのカレンダー/時計アイコンを見えやすく（Chrome/Edge系）
-    const dateTimeInputClass =
-      "md:w-64 [color-scheme:dark] [&::-webkit-calendar-picker-indicator]:invert [&::-webkit-calendar-picker-indicator]:opacity-80 [&::-webkit-calendar-picker-indicator]:cursor-pointer";
-    const monthInputClass =
-      "[color-scheme:dark] [&::-webkit-calendar-picker-indicator]:invert [&::-webkit-calendar-picker-indicator]:opacity-80 [&::-webkit-calendar-picker-indicator]:cursor-pointer";
-
+    // ✅ ネイティブのカレンダー/時計アイコンをダーク対応にする
+    const dateTimeInputClass = "md:w-64 [color-scheme:dark]";
+    const monthInputClass = "[color-scheme:dark]";
     const nativeSelectClass =
       "h-10 w-full rounded-md border border-slate-800 bg-slate-950/50 px-3 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-pink-500/40";
+
+    const returnTo = `/dashboard/attendance?month=${monthYyyyMm}&staffId=${staffSelectValue}&day=${selectedDayKey}`;
 
     return (
       <div className="space-y-8">
@@ -530,7 +492,7 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
             <form className="grid gap-4 sm:grid-cols-3 sm:items-end" method="get">
               <div className="space-y-2">
                 <Label htmlFor="month">月</Label>
-                <Input id="month" name="month" type="month" defaultValue={monthKey} className={monthInputClass} />
+                <Input id="month" name="month" type="month" defaultValue={monthYyyyMm} className={monthInputClass} />
               </div>
 
               <div className="space-y-2">
@@ -546,7 +508,6 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
               </div>
 
               <div className="flex justify-end">
-                {/* day は維持しない（選択した月の先頭日に寄せる挙動でOK） */}
                 <Button type="submit" size="sm" className="min-w-[96px]">
                   表示
                 </Button>
@@ -561,7 +522,7 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
           </CardHeader>
           <CardContent className="flex flex-wrap items-end justify-between gap-3">
             <div className="text-3xl font-bold text-pink-300">
-              {monthTotal.hours} 時間 {monthTotal.remainderMinutes} 分
+              {monthlySummary.roundedHours} 時間 {monthlySummary.roundedRemainderMinutes} 分
             </div>
 
             {selectedStaffId ? (
@@ -575,7 +536,7 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
         <Card>
           <CardHeader className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div>
-              <CardTitle>{format(selectedDayLabelDate, "yyyy-MM-dd (E)", { locale: ja })} の勤怠詳細</CardTitle>
+              <CardTitle>{format(selectedDay, "yyyy-MM-dd (E)", { locale: ja })} の勤怠詳細</CardTitle>
               <CardDescription>
                 {selectedDayApproved
                   ? "承認済みです（※編集・削除の制限はありません）"
@@ -587,7 +548,7 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
               <div className="flex gap-2">
                 {selectedDayApproved ? (
                   <form action={unapproveDay}>
-                    <input type="hidden" name="dateKey" value={selectedDayKey} />
+                    <input type="hidden" name="date" value={selectedDay.toISOString()} />
                     <input type="hidden" name="returnTo" value={returnTo} />
                     <Button type="submit" variant="secondary" size="sm">
                       承認取消
@@ -595,7 +556,7 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                   </form>
                 ) : (
                   <form action={approveDay}>
-                    <input type="hidden" name="dateKey" value={selectedDayKey} />
+                    <input type="hidden" name="date" value={selectedDay.toISOString()} />
                     <input type="hidden" name="returnTo" value={returnTo} />
                     <Button type="submit" size="sm">
                       承認
@@ -634,12 +595,12 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
 
                 <div className="space-y-2">
                   <Label className="text-xs text-slate-400">出勤</Label>
-                  <Input type="datetime-local" name="clockIn" required defaultValue="" className={dateTimeInputClass} />
+                  <Input type="datetime-local" name="clockIn" required className={dateTimeInputClass} />
                 </div>
 
                 <div className="space-y-2">
                   <Label className="text-xs text-slate-400">退勤</Label>
-                  <Input type="datetime-local" name="clockOut" required defaultValue="" className={dateTimeInputClass} />
+                  <Input type="datetime-local" name="clockOut" required className={dateTimeInputClass} />
                 </div>
 
                 <div className="flex items-center justify-between gap-3 lg:justify-end">
@@ -672,22 +633,45 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
 
                   return (
                     <li key={staffId} className="space-y-3 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
-                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                          <p className="text-base font-semibold text-pink-200">{group.staffName}</p>
-                          <div className="mt-1 flex flex-wrap items-center gap-2">
-                            <p className="text-xs text-slate-400">{group.isApproved ? "承認済み" : "未承認"}</p>
-                            {group.isOwnerCreated ? (
-                              <span className="rounded-full bg-slate-800/70 px-2 py-1 text-[11px] text-slate-200">
-                                オーナー作成（写真なし）
-                              </span>
-                            ) : null}
-                            {group.companion ? (
-                              <span className="rounded-full bg-pink-900/40 px-2 py-1 text-[11px] text-pink-200">
-                                同伴（出勤）
-                              </span>
-                            ) : null}
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="space-y-2">
+                          <div>
+                            <p className="text-base font-semibold text-pink-200">{group.staffName}</p>
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                              <p className="text-xs text-slate-400">{group.isApproved ? "承認済み" : "未承認"}</p>
+
+                              {group.isOwnerCreated ? (
+                                <span className="rounded-full bg-slate-800/70 px-2 py-1 text-[11px] text-slate-200">
+                                  オーナー作成（写真なし）
+                                </span>
+                              ) : null}
+
+                              {group.companion ? (
+                                <span className="rounded-full bg-pink-900/40 px-2 py-1 text-[11px] text-pink-200">
+                                  同伴（出勤）
+                                </span>
+                              ) : null}
+                            </div>
                           </div>
+
+                          {/* ✅ 出勤写真表示（端末打刻のみ） */}
+                          {group.clockInPhotoUrl ? (
+                            <a
+                              href={group.clockInPhotoUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block w-fit rounded-lg border border-slate-800/60 bg-black/40 p-2"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={group.clockInPhotoUrl}
+                                alt="出勤写真"
+                                className="h-32 w-32 rounded-md object-cover"
+                                loading="lazy"
+                              />
+                              <p className="mt-1 text-[11px] text-slate-400">出勤写真（クリックで拡大）</p>
+                            </a>
+                          ) : null}
                         </div>
 
                         <div className="text-right text-xs text-slate-400">
@@ -720,24 +704,11 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                               ) : null}
                             </div>
 
-                            {/* ✅ 写真表示（端末撮影分） */}
-                            {clockInRecord?.photo?.photoUrl ? (
-                              <div className="rounded-md border border-slate-800/70 bg-black/30 p-2">
-                                <p className="mb-2 text-xs text-slate-400">出勤写真</p>
-                                <img
-                                  src={clockInRecord.photo.photoUrl}
-                                  alt="出勤写真"
-                                  className="w-full max-w-sm rounded-md border border-slate-800"
-                                />
-                              </div>
-                            ) : null}
-
                             <form
                               action={upsertClockEvent}
                               className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4"
                             >
                               <input type="hidden" name="returnTo" value={returnTo} />
-
                               <input
                                 type="hidden"
                                 name="attendanceId"
@@ -753,7 +724,9 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                                   name="timestamp"
                                   required
                                   defaultValue={
-                                    clockInRecord ? format(toJst(clockInRecord.timestamp), "yyyy-MM-dd'T'HH:mm") : ""
+                                    clockInRecord
+                                      ? format(toJst(clockInRecord.timestamp), "yyyy-MM-dd'T'HH:mm")
+                                      : ""
                                   }
                                   className={dateTimeInputClass}
                                 />
@@ -796,7 +769,6 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                               className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4"
                             >
                               <input type="hidden" name="returnTo" value={returnTo} />
-
                               <input
                                 type="hidden"
                                 name="attendanceId"
@@ -812,7 +784,9 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                                   name="timestamp"
                                   required
                                   defaultValue={
-                                    clockOutRecord ? format(toJst(clockOutRecord.timestamp), "yyyy-MM-dd'T'HH:mm") : ""
+                                    clockOutRecord
+                                      ? format(toJst(clockOutRecord.timestamp), "yyyy-MM-dd'T'HH:mm")
+                                      : ""
                                   }
                                   className={dateTimeInputClass}
                                 />
@@ -824,7 +798,7 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                             </form>
                           </div>
 
-                          {/* 休憩など（既存の個別レコード編集/削除） */}
+                          {/* 休憩など */}
                           {group.records.filter((r) => !["CLOCK_IN", "CLOCK_OUT"].includes(r.type)).length === 0 ? (
                             <p className="text-xs text-slate-500">休憩などの追加レコードはありません。</p>
                           ) : (
@@ -849,15 +823,14 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                                             : "未承認"}
                                         </p>
                                       </div>
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <form action={deleteAttendance}>
-                                          <input type="hidden" name="attendanceId" value={attendance.id} />
-                                          <input type="hidden" name="returnTo" value={returnTo} />
-                                          <Button type="submit" size="sm" variant="destructive">
-                                            削除
-                                          </Button>
-                                        </form>
-                                      </div>
+
+                                      <form action={deleteAttendance}>
+                                        <input type="hidden" name="attendanceId" value={attendance.id} />
+                                        <input type="hidden" name="returnTo" value={returnTo} />
+                                        <Button type="submit" size="sm" variant="destructive">
+                                          削除
+                                        </Button>
+                                      </form>
                                     </div>
 
                                     <form
@@ -902,18 +875,17 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
           </CardHeader>
           <CardContent>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
-              {calendarDayKeys.map((key) => {
+              {calendarDays.map((dayJst) => {
+                const key = format(dayJst, "yyyy-MM-dd");
                 const dayAttendances = attendanceByDate[key] ?? [];
                 const uniqueNames = Array.from(new Set(dayAttendances.map((a) => a.user.displayName)));
                 const approved = approvalByDate[key];
                 const isSelected = key === selectedDayKey;
 
-                const dayLabelDate = dateKeyToJstNoon(key);
-
                 return (
                   <Link
                     key={key}
-                    href={`/dashboard/attendance?month=${monthKey}&staffId=${staffSelectValue}&day=${key}`}
+                    href={`/dashboard/attendance?month=${monthYyyyMm}&staffId=${staffSelectValue}&day=${key}`}
                     className="focus-visible:outline-none"
                   >
                     <div
@@ -922,8 +894,8 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                       }`}
                     >
                       <div className="flex items-baseline justify-between">
-                        <p className="text-sm font-semibold text-pink-200">{format(dayLabelDate, "M/d")}</p>
-                        <p className="text-[11px] text-slate-500">{format(dayLabelDate, "EEE", { locale: ja })}</p>
+                        <p className="text-sm font-semibold text-pink-200">{format(dayJst, "M/d")}</p>
+                        <p className="text-[11px] text-slate-500">{format(dayJst, "EEE", { locale: ja })}</p>
                       </div>
 
                       {approved ? (
@@ -938,7 +910,9 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                         ) : (
                           uniqueNames.slice(0, 2).map((name) => <p key={name}>{name}</p>)
                         )}
-                        {uniqueNames.length > 2 ? <p className="text-slate-500">+{uniqueNames.length - 2} 名</p> : null}
+                        {uniqueNames.length > 2 ? (
+                          <p className="text-slate-500">+{uniqueNames.length - 2} 名</p>
+                        ) : null}
                       </div>
                     </div>
                   </Link>
