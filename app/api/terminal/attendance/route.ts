@@ -10,6 +10,41 @@ import { getOrCreateDefaultStore } from "@/lib/store";
 const allowedTypes = ["CLOCK_IN", "CLOCK_OUT", "BREAK_START", "BREAK_END"] as const;
 type AttendanceType = (typeof allowedTypes)[number];
 
+/**
+ * ✅ 端末側の表記ゆれを吸収する
+ * - CLOCK_OUT / clockOut / CLOCKOUT / clock-out / clock_out などを許容
+ * - BREAK_START / breakStart / BREAKSTART / break-start 等も許容
+ */
+function normalizeAttendanceType(raw?: unknown): AttendanceType | null {
+  if (raw === null || raw === undefined) return null;
+
+  let s = String(raw).trim();
+  if (!s) return null;
+
+  // まずは一般的な区切りを "_" に寄せる
+  s = s.replace(/\s+/g, "_").replace(/-/g, "_").toUpperCase();
+
+  // "_" を含まない表記（例: CLOCKOUT / BREAKSTART）を補正
+  const compact = s.replace(/_/g, "");
+  switch (compact) {
+    case "CLOCKIN":
+      return "CLOCK_IN";
+    case "CLOCKOUT":
+      return "CLOCK_OUT";
+    case "BREAKSTART":
+      return "BREAK_START";
+    case "BREAKEND":
+      return "BREAK_END";
+    default:
+      break;
+  }
+
+  // ここまでで "_" 付きになっている想定
+  if ((allowedTypes as readonly string[]).includes(s)) return s as AttendanceType;
+
+  return null;
+}
+
 export async function POST(request: Request) {
   try {
     const { staffId, storeId, terminalId, type, action, isCompanion, photoUrl } =
@@ -17,19 +52,15 @@ export async function POST(request: Request) {
         staffId?: string;
         storeId?: string;
         terminalId?: string;
-        type?: AttendanceType;
-        action?: AttendanceType;
+        type?: AttendanceType | string;
+        action?: AttendanceType | string;
         isCompanion?: boolean;
         photoUrl?: string;
       };
 
-    const normalizedType = (action ?? type)
-      ? (action ?? type)?.toString().replace(/-/g, "_").toUpperCase()
-      : undefined;
+    const resolvedType = normalizeAttendanceType(action ?? type);
 
-    const resolvedType = allowedTypes.find((candidate) => candidate === normalizedType);
-
-    if (!staffId || !resolvedType || !allowedTypes.includes(resolvedType)) {
+    if (!staffId || !resolvedType) {
       return NextResponse.json({ error: "Invalid request" }, { status: 400 });
     }
 
@@ -61,8 +92,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
     }
 
-    // ✅ 承認/未承認による制限はしない（仕様変更）
+    // ✅ 承認/未承認による制限はしない（仕様）
 
+    // ✅ 出勤のみ写真必須
     if (resolvedType === "CLOCK_IN" && !photoUrl) {
       return NextResponse.json({ error: "出勤時の写真が必要です" }, { status: 400 });
     }
