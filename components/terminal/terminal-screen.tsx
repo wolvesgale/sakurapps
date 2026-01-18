@@ -1,3 +1,4 @@
+// components/terminal/terminal-screen.tsx
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
@@ -193,8 +194,26 @@ export function TerminalScreen() {
       setStatusMessage("出勤時の写真を撮影してください");
       return;
     }
+    if (!store?.id) {
+      setStatusMessage("店舗情報が取得できていません");
+      return;
+    }
+    if (type === "CLOCK_IN" && !photoUrl) {
+      setStatusMessage("出勤時の写真を撮影してください");
+      return;
+    }
+    if (!store?.id) {
+      setStatusMessage("店舗情報が取得できていません");
+      return;
+    }
+    if (type === "CLOCK_IN" && !photoUrl) {
+      setStatusMessage("出勤時の写真を撮影してください");
+      return;
+    }
+
     setIsSubmitting(true);
     setStatusMessage(null);
+
     try {
       const res = await fetch("/api/terminal/attendance", {
         method: "POST",
@@ -208,10 +227,13 @@ export function TerminalScreen() {
           photoUrl
         })
       });
+
       if (!res.ok) {
-        const body = await res.json();
-        throw new Error(body.error ?? "エラーが発生しました");
+        const body = await res.json().catch(() => ({}));
+        // ✅ 順序チェックのエラーもここに来る（「勤怠状態を確認してください」）
+        throw new Error((body as { error?: string }).error ?? "エラーが発生しました");
       }
+
       setStatusMessage("勤怠を登録しました");
       setCompanionChecked(false);
       if (store?.id) {
@@ -234,8 +256,10 @@ export function TerminalScreen() {
       setStatusMessage("金額を正しく入力してください");
       return;
     }
+
     setIsSubmitting(true);
     setStatusMessage(null);
+
     try {
       const res = await fetch("/api/terminal/sales", {
         method: "POST",
@@ -248,10 +272,12 @@ export function TerminalScreen() {
           terminalId: null
         })
       });
+
       if (!res.ok) {
         const body = await res.json();
         throw new Error(body.error ?? "エラーが発生しました");
       }
+
       setStatusMessage("売上を登録しました");
       setSaleAmount("0");
       setSaleCastId(NO_SELECTION);
