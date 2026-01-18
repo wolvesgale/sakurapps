@@ -29,13 +29,11 @@ type StoreInfo = {
   closingTime?: string | null;
 };
 
-// ✅ API: GET /api/terminal/attendance の返却に合わせる
 type ActiveStaff = {
-  userId: string;
+  id: string;
   displayName: string;
-  state: "WORKING" | "BREAK";
-  lastType: "CLOCK_IN" | "CLOCK_OUT" | "BREAK_START" | "BREAK_END";
-  lastTimestamp: string; // ISO想定
+  clockInAt: string | null;
+  isCompanion: boolean;
 };
 
 type AttendanceAction = "CLOCK_IN" | "CLOCK_OUT" | "BREAK_START" | "BREAK_END";
@@ -44,9 +42,7 @@ type PaymentMethod = "CASH" | "PAYPAY" | "CARD";
 
 const FALLBACK_STORE_NAME = "Nest SAKURA";
 const NO_SELECTION = "__none__";
-
-// ✅ 復活（常時表示）
-const SHOW_ACTIVE_STAFF = true;
+const SHOW_ACTIVE_STAFF = false; // 将来復活させる場合は true に戻す
 
 export function TerminalScreen() {
   const [store, setStore] = useState<StoreInfo | null>(null);
@@ -63,9 +59,6 @@ export function TerminalScreen() {
   const [saleAmount, setSaleAmount] = useState("0");
   const [activeStaff, setActiveStaff] = useState<ActiveStaff[]>([]);
   const [isLoadingStore, setIsLoadingStore] = useState(false);
-
-  // ※ 現状は開発モードで terminalId=null のまま（既存仕様維持）
-  const terminalId: string | null = null;
 
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -91,13 +84,7 @@ export function TerminalScreen() {
           throw new Error("店舗情報を取得できませんでした");
         }
         const body = (await response.json()) as {
-          stores?: {
-            id: string;
-            name: string;
-            openingTime?: string | null;
-            closingTime?: string | null;
-            casts?: TerminalCast[];
-          }[];
+          stores?: { id: string; name: string; openingTime?: string | null; closingTime?: string | null; casts?: TerminalCast[] }[];
         };
         const firstStore = body.stores?.[0];
         if (firstStore) {
@@ -126,17 +113,11 @@ export function TerminalScreen() {
     fetchStore();
   }, []);
 
-  // ✅ 出勤中スタッフ取得：GET /api/terminal/attendance を使用
   const fetchActiveStaff = async (storeId: string) => {
     try {
-      const qs = new URLSearchParams();
-      qs.set("storeId", storeId);
-      if (terminalId) qs.set("terminalId", terminalId);
-
-      const response = await fetch(`/api/terminal/attendance?${qs.toString()}`, { cache: "no-store" });
+      const response = await fetch(`/api/terminal/active-staff?storeId=${storeId}`);
       if (!response.ok) {
-        // 端末認証NGなどは表示を壊さない（既存影響回避）
-        return;
+        throw new Error("出勤中メンバーの取得に失敗しました");
       }
       const body = (await response.json()) as { activeStaff?: ActiveStaff[] };
       setActiveStaff(body.activeStaff ?? []);
@@ -151,8 +132,6 @@ export function TerminalScreen() {
     let interval: ReturnType<typeof setInterval> | null = null;
 
     fetchActiveStaff(store.id);
-
-    // 既存の15秒更新はそのまま（必要なら30秒にもできる）
     interval = setInterval(() => {
       if (store.id) {
         fetchActiveStaff(store.id);
@@ -215,6 +194,14 @@ export function TerminalScreen() {
       setStatusMessage("出勤時の写真を撮影してください");
       return;
     }
+    if (!store?.id) {
+      setStatusMessage("店舗情報が取得できていません");
+      return;
+    }
+    if (type === "CLOCK_IN" && !photoUrl) {
+      setStatusMessage("出勤時の写真を撮影してください");
+      return;
+    }
 
     setIsSubmitting(true);
     setStatusMessage(null);
@@ -225,8 +212,8 @@ export function TerminalScreen() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           staffId: selectedCastId,
-          storeId: store.id,
-          terminalId: terminalId,
+          storeId: store?.id,
+          terminalId: null,
           type,
           isCompanion: companionChecked,
           photoUrl
@@ -241,8 +228,7 @@ export function TerminalScreen() {
 
       setStatusMessage("勤怠を登録しました");
       setCompanionChecked(false);
-
-      if (store.id) {
+      if (store?.id) {
         fetchActiveStaff(store.id);
       }
     } catch (err) {
@@ -275,7 +261,7 @@ export function TerminalScreen() {
           storeId: store?.id,
           paymentMethod: salePayment,
           amount,
-          terminalId: terminalId
+          terminalId: null
         })
       });
 
@@ -366,14 +352,6 @@ export function TerminalScreen() {
       setStatusMessage((error as Error).message);
     } finally {
       setIsSubmitting(false);
-    }
-  };
-
-  const formatHm = (iso: string) => {
-    try {
-      return format(new Date(iso), "HH:mm");
-    } catch {
-      return "—";
     }
   };
 
@@ -474,57 +452,37 @@ export function TerminalScreen() {
             </Button>
           </div>
 
-          {/* ✅ 出勤中スタッフ表示（復活） */}
           {SHOW_ACTIVE_STAFF ? (
             <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-pink-200">出勤中スタッフ</h3>
+                <h3 className="text-lg font-semibold text-pink-200">現在出勤中</h3>
                 <p className="text-xs text-slate-500">{store?.name ?? FALLBACK_STORE_NAME}</p>
               </div>
-
               <div className="space-y-2">
                 {activeStaff.length === 0 ? (
-                  <p className="text-sm text-slate-500">出勤中のスタッフはいません。</p>
+                  <p className="text-sm text-slate-500">出勤中のキャストはいません。</p>
                 ) : (
                   activeStaff.map((member) => (
                     <div
-                      key={member.userId}
+                      key={member.id}
                       className="flex items-center justify-between rounded-xl border border-slate-800 bg-black/60 px-3 py-2 text-sm text-slate-100"
                     >
                       <div className="flex flex-col">
                         <span className="font-semibold">{member.displayName}</span>
                         <span className="text-xs text-slate-400">
-                          {member.state === "BREAK" ? "休憩中" : "勤務中"} / 最終: {formatHm(member.lastTimestamp)}
+                          {member.clockInAt ? `${format(new Date(member.clockInAt), "HH:mm")}〜` : "時間未取得"}
                         </span>
                       </div>
-
                       <div className="flex items-center gap-2">
-                        {member.state === "BREAK" ? (
-                          <span className="rounded-full bg-slate-800/80 px-2 py-1 text-[10px] text-slate-100">
-                            BREAK
+                        {member.isCompanion ? (
+                          <span className="rounded-full bg-pink-900/60 px-2 py-1 text-[10px] text-pink-100">
+                            同伴
                           </span>
-                        ) : (
-                          <span className="rounded-full bg-pink-900/40 px-2 py-1 text-[10px] text-pink-100">
-                            WORK
-                          </span>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                   ))
                 )}
-              </div>
-
-              <div className="flex justify-end">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={!store?.id}
-                  onClick={() => {
-                    if (store?.id) fetchActiveStaff(store.id);
-                  }}
-                >
-                  更新
-                </Button>
               </div>
             </div>
           ) : null}
@@ -612,7 +570,6 @@ export function TerminalScreen() {
             </div>
             <div className="aspect-video w-full overflow-hidden rounded-xl border border-slate-800 bg-black">
               {capturedDataUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
                 <img src={capturedDataUrl} alt="撮影プレビュー" className="h-full w-full object-cover" />
               ) : (
                 <video ref={videoRef} playsInline muted className="h-full w-full object-cover" />

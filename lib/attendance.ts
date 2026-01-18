@@ -24,6 +24,13 @@ type DayApprovalParams = {
   approverId: string;
 };
 
+type RangeSummaryParams = {
+  storeId?: string;
+  staffId?: string;
+  startDate: Date;
+  endDate: Date;
+};
+
 export function getDayRange(date: Date) {
   const from = startOfDay(date);
   const to = addDays(from, 1);
@@ -97,6 +104,25 @@ export async function getMonthlyAttendanceSummary({ storeId, staffId, year, mont
     where: {
       storeId: targetStoreId,
       timestamp: { gte: monthStart, lt: monthEnd },
+      ...(staffId ? { userId: staffId } : {})
+    },
+    orderBy: { timestamp: "asc" }
+  });
+
+  return calculateMonthlySummaryFromRecords(records);
+}
+
+export async function getAttendanceSummaryForRange({
+  storeId,
+  staffId,
+  startDate,
+  endDate
+}: RangeSummaryParams) {
+  const targetStoreId = storeId ?? (await getOrCreateDefaultStore()).id;
+  const records = await prisma.attendance.findMany({
+    where: {
+      storeId: targetStoreId,
+      timestamp: { gte: startDate, lt: endDate },
       ...(staffId ? { userId: staffId } : {})
     },
     orderBy: { timestamp: "asc" }

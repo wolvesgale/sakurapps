@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { verifyTerminalAccess } from "@/lib/terminal";
 import { getOrCreateDefaultStore } from "@/lib/store";
+import { addDays, startOfDay } from "date-fns";
 
 const allowedTypes = ["CLOCK_IN", "CLOCK_OUT", "BREAK_START", "BREAK_END"] as const;
 type AttendanceType = (typeof allowedTypes)[number];
@@ -120,14 +121,20 @@ export async function POST(request: Request) {
         photoUrl?: string;
       };
 
-    const resolvedType = normalizeType((action ?? type) as unknown as string);
+    const normalizedType = (action ?? type)
+      ? (action ?? type)?.toString().replace(/-/g, "_").toUpperCase()
+      : undefined;
 
-    if (!staffId || !resolvedType) {
+    const resolvedType = allowedTypes.find((candidate) => candidate === normalizedType);
+
+    if (!staffId || !resolvedType || !allowedTypes.includes(resolvedType)) {
       return NextResponse.json({ error: "Invalid request" }, { status: 400 });
     }
 
     const defaultStore = await getOrCreateDefaultStore();
     const targetStoreId = storeId ?? defaultStore.id;
+
+    const terminal = await verifyTerminalAccess(targetStoreId, terminalId);
 
     const terminal = await verifyTerminalAccess(targetStoreId, terminalId);
     if (!terminal) {
@@ -138,31 +145,20 @@ export async function POST(request: Request) {
       where: {
         id: staffId,
         role: { in: ["CAST", "DRIVER"] },
-        isActive: true,
-      },
+        isActive: true
+      }
     });
 
-    if (!staff) return NextResponse.json({ error: "Staff not found" }, { status: 404 });
-    if (terminal.storeId !== targetStoreId) return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
-    if (staff.storeId && staff.storeId !== targetStoreId) return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
-
-    // 出勤は写真必須
-    if (resolvedType === "CLOCK_IN" && !photoUrl) {
-      return NextResponse.json({ error: "出勤時の写真が必要です" }, { status: 400 });
+    if (!staff) {
+      return NextResponse.json({ error: "Staff not found" }, { status: 404 });
     }
 
-    // ✅ 状態遷移チェック（順序チェック）
-    const last = await prisma.attendance.findFirst({
-      where: { storeId: targetStoreId, userId: staff.id },
-      orderBy: { timestamp: "desc" },
-      select: { type: true },
-    });
+    if (terminal.storeId !== targetStoreId) {
+      return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
+    }
 
-    const lastType = (last?.type as AttendanceType | undefined) ?? undefined;
-    const state = deriveStateFromLastType(lastType);
-
-    if (!isValidTransition(state, resolvedType)) {
-      return NextResponse.json({ error: GENERIC_STATE_ERROR }, { status: 400 });
+    if (staff.storeId && staff.storeId !== targetStoreId) {
+      return NextResponse.json({ error: "Store mismatch" }, { status: 400 });
     }
 
     const now = new Date();
@@ -210,6 +206,50 @@ export async function POST(request: Request) {
     const message = error instanceof Error ? error.message : "Internal server error";
     const isSchemaMissing =
       error instanceof Prisma.PrismaClientKnownRequestError && (error.code === "P2021" || error.code === "P2022");
+
+    if (isSchemaMissing) {
+      console.error("[terminal-attendance] attendancePhoto table missing", error);
+      return NextResponse.json(
+        { error: "出勤写真の保存に失敗しました。最新のマイグレーションを適用してください。" },
+        { status: 500 }
+      );
+    }
+
+    if (resolvedType === "CLOCK_IN" && !photoUrl) {
+      return NextResponse.json({ error: "出勤時の写真が必要です" }, { status: 400 });
+    }
+
+    const attendance = await prisma.$transaction(async (tx) => {
+      const created = await tx.attendance.create({
+        data: {
+          userId: staff.id,
+          storeId: targetStoreId,
+          type: resolvedType,
+          timestamp: new Date(),
+          isCompanion: resolvedType === "CLOCK_IN" ? Boolean(isCompanion) : false
+        }
+      });
+
+      if (resolvedType === "CLOCK_IN" && photoUrl) {
+        await tx.attendancePhoto.create({
+          data: {
+            attendanceId: created.id,
+            storeId: targetStoreId,
+            staffId: staff.id,
+            photoUrl
+          }
+        });
+      }
+
+      return created;
+    });
+
+    return NextResponse.json({ attendance });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Internal server error";
+    const isSchemaMissing =
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      (error.code === "P2021" || error.code === "P2022");
 
     if (isSchemaMissing) {
       console.error("[terminal-attendance] attendancePhoto table missing", error);

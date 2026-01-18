@@ -1,4 +1,3 @@
-// app/(dashboard)/dashboard/attendance/page.tsx
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -6,21 +5,24 @@ import {
   addDays,
   differenceInMinutes,
   eachDayOfInterval,
+  endOfMonth,
   format,
   isValid,
   startOfDay,
+  startOfMonth
 } from "date-fns";
 import { ja } from "date-fns/locale";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { getOrCreateDefaultStore } from "@/lib/store";
-import { getMonthlyAttendanceSummary, updateDayApproval } from "@/lib/attendance";
+import { getAttendanceSummaryForRange, getMonthlyAttendanceSummary, updateDayApproval } from "@/lib/attendance";
 import { pruneOldAttendancePhotos } from "@/lib/attendance-photo";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export const dynamic = "force-dynamic";
 
@@ -28,55 +30,20 @@ const attendanceLabels: Record<string, string> = {
   CLOCK_IN: "出勤",
   CLOCK_OUT: "退勤",
   BREAK_START: "休憩開始",
-  BREAK_END: "休憩終了",
+  BREAK_END: "休憩終了"
 };
 
 const TZ = "Asia/Tokyo";
 
-/**
- * ✅ 安定したJST変換（Vercel/NodeのTZに依存しない）
- * - Intl.formatToParts で JST の “壁時計” を取り出し
- * - Date.UTC で “その壁時計をUTCとして扱うDate” を作る
- *   → date-fns format() をサーバで使っても表示が崩れにくい
- */
-function getJstParts(date: Date) {
-  const dtf = new Intl.DateTimeFormat("en-CA", {
-    timeZone: TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  });
+const toJst = (date: Date) => new Date(date.toLocaleString("en-US", { timeZone: TZ }));
 
-  const parts = dtf.formatToParts(date);
-  const pick = (type: string) => parts.find((p) => p.type === type)?.value ?? "00";
-
-  const year = Number(pick("year"));
-  const month = Number(pick("month"));
-  const day = Number(pick("day"));
-  const hour = Number(pick("hour"));
-  const minute = Number(pick("minute"));
-  const second = Number(pick("second"));
-
-  return { year, month, day, hour, minute, second };
-}
-
-const toJstWallClockDate = (date: Date) => {
-  const p = getJstParts(date);
-  return new Date(Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second));
+const parseJstDateParam = (value?: string) => {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const date = new Date(`${value}T00:00:00+09:00`);
+  return Number.isNaN(date.getTime()) ? null : date;
 };
 
-const jstDayKeyFromDate = (date: Date) => {
-  const p = getJstParts(date);
-  const mm = String(p.month).padStart(2, "0");
-  const dd = String(p.day).padStart(2, "0");
-  return `${p.year}-${mm}-${dd}`;
-};
-
-type AttendanceRecord = Prisma.AttendanceGetPayload<{ include: { user: true; approvedBy: true } }>;
+type AttendanceRecord = Prisma.AttendanceGetPayload<{ include: { user: true; approvedBy: true; photo: true } }>;
 type AttendanceApprovalRecord = Prisma.AttendanceApprovalGetPayload<Record<string, never>>;
 
 type AttendancePageProps = {
@@ -84,6 +51,8 @@ type AttendancePageProps = {
     month?: string;
     staffId?: string;
     day?: string;
+    startDate?: string;
+    endDate?: string;
   };
 };
 
@@ -93,143 +62,75 @@ type DaySummary = {
   workingMinutes: number;
 };
 
-const QUARTER_MIN = 15;
-
-function ceilToQuarter(d: Date) {
-  const ms = d.getTime();
-  const q = QUARTER_MIN * 60 * 1000;
-  return new Date(Math.ceil(ms / q) * q);
-}
-
-function floorToQuarter(d: Date) {
-  const ms = d.getTime();
-  const q = QUARTER_MIN * 60 * 1000;
-  return new Date(Math.floor(ms / q) * q);
-}
-
 function buildDaySummary(records: AttendanceRecord[]): DaySummary {
   if (records.length === 0) return { clockInJst: null, clockOutJst: null, workingMinutes: 0 };
 
   const events = records
-    .map((r) => ({ ...r, jst: toJstWallClockDate(r.timestamp) }))
+    .map((record) => ({ ...record, jst: toJst(record.timestamp) }))
     .sort((a, b) => a.jst.getTime() - b.jst.getTime());
 
-  const clockInEvent = events.find((e) => e.type === "CLOCK_IN") ?? null;
-  const clockOutEvent = [...events].reverse().find((e) => e.type === "CLOCK_OUT") ?? null;
+  const clockInEvent = events.find((e) => e.type === "CLOCK_IN");
+  const clockOutEvent = [...events].reverse().find((e) => e.type === "CLOCK_OUT");
 
-  if (!clockInEvent) return { clockInJst: null, clockOutJst: null, workingMinutes: 0 };
+  let workingMinutes = 0;
+  let currentStart: Date | null = null;
+  let inBreak = false;
 
-  // 勤務区間（退勤が無い場合は「今」まで）
-  const nowJst = toJstWallClockDate(new Date());
-  const rawStart = clockInEvent.jst;
-  const rawEnd = clockOutEvent?.jst ?? nowJst;
-
-  // ✅ 15分切り上げ（要望に合わせて IN/OUT は切り上げ）
-  const start = ceilToQuarter(rawStart);
-  const end = ceilToQuarter(rawEnd);
-
-  // ✅ 休憩は勤務区間内だけ集計（外側は無視）
-  // 休憩の丸め方は「開始は切り下げ、終了は切り上げ」にしておくと、
-  // 休憩が短くなり過ぎる事故を防げる（好みで調整可）
-  let breakMinutes = 0;
-  let breakStart: Date | null = null;
-
-  for (const e of events) {
-    const t = e.jst;
-
-    // 勤務区間外は無視
-    if (t.getTime() < rawStart.getTime() || t.getTime() > rawEnd.getTime()) continue;
-
-    if (e.type === "BREAK_START") {
-      breakStart = t;
+  for (const event of events) {
+    switch (event.type) {
+      case "CLOCK_IN": {
+        currentStart = event.jst;
+        inBreak = false;
+        break;
+      }
+      case "BREAK_START": {
+        if (currentStart && !inBreak) {
+          workingMinutes += differenceInMinutes(event.jst, currentStart);
+          currentStart = null;
+        }
+        inBreak = true;
+        break;
+      }
+      case "BREAK_END": {
+        if (inBreak) {
+          currentStart = event.jst;
+          inBreak = false;
+        }
+        break;
+      }
+      case "CLOCK_OUT": {
+        if (currentStart && !inBreak) {
+          workingMinutes += differenceInMinutes(event.jst, currentStart);
+          currentStart = null;
+        }
+        break;
+      }
+      default:
+        break;
     }
-    if (e.type === "BREAK_END" && breakStart) {
-      const bs = floorToQuarter(breakStart);
-      const be = ceilToQuarter(t);
-      const mins = Math.max(0, differenceInMinutes(be, bs));
-      breakMinutes += mins;
-      breakStart = null;
-    }
   }
 
-  // BREAK_STARTだけあってBREAK_ENDが無い場合（休憩中で終わった等）
-  if (breakStart) {
-    const bs = floorToQuarter(breakStart);
-    const be = ceilToQuarter(rawEnd);
-    breakMinutes += Math.max(0, differenceInMinutes(be, bs));
-  }
-
-  const baseMinutes = Math.max(0, differenceInMinutes(end, start));
-  const workingMinutes = Math.max(0, baseMinutes - breakMinutes);
-
-  return {
-    clockInJst: clockInEvent.jst,
-    clockOutJst: clockOutEvent?.jst ?? null,
-    workingMinutes,
-  };
-}
-
-
-function isYyyyMm(value: string | null | undefined) {
-  return Boolean(value && /^\d{4}-\d{2}$/.test(value));
-}
-
-function isYyyyMmDd(value: string | null | undefined) {
-  return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
-}
-
-function nextMonthYyyyMm(yyyyMm: string) {
-  const [y, m] = yyyyMm.split("-").map((v) => Number(v));
-  const d = new Date(Date.UTC(y, m - 1, 1));
-  d.setUTCMonth(d.getUTCMonth() + 1);
-  const ny = d.getUTCFullYear();
-  const nm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  return `${ny}-${nm}`;
-}
-
-function parseJstMonthRangeUtc(monthYyyyMm: string) {
-  // JST月初(00:00+09:00) を UTC Date にする
-  const from = new Date(`${monthYyyyMm}-01T00:00:00+09:00`);
-  const to = new Date(`${nextMonthYyyyMm(monthYyyyMm)}-01T00:00:00+09:00`); // 翌月月初(JST)
-  return { from, to };
-}
-
-function parseSelectedDayJstStart(dayYmd: string) {
-  // JSTの 00:00 を UTC に落とした上で “壁時計Date” へ
-  const baseUtc = new Date(`${dayYmd}T00:00:00+09:00`);
-  return startOfDay(toJstWallClockDate(baseUtc));
-}
-
-/**
- * ✅ datetime-local の入力値をJST(+09:00)として安全に Date 化する
- * - "2025-12-25T20:01"
- * - "2025/12/25 20:01"
- * どちらでも通るように正規化する
- */
-function parseJstDateTimeLocal(raw: string) {
-  let s = (raw ?? "").trim();
-  s = s.replace(/\//g, "-");
-  s = s.replace(" ", "T");
-
-  // 秒が無い場合は付与
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) {
-    s = `${s}:00`;
-  }
-
-  // 既にTZが付いているならそのまま
-  if (/[zZ]|[+-]\d{2}:\d{2}$/.test(s)) {
-    return new Date(s);
-  }
-
-  return new Date(`${s}+09:00`);
+  return { clockInJst: clockInEvent?.jst ?? null, clockOutJst: clockOutEvent?.jst ?? null, workingMinutes };
 }
 
 async function safeFetchAttendances(params: Prisma.AttendanceFindManyArgs): Promise<AttendanceRecord[]> {
   try {
     return (await prisma.attendance.findMany(params)) as AttendanceRecord[];
   } catch (error) {
-    console.error("[attendance] fetch failed", error);
-    return [] as AttendanceRecord[];
+    console.error("[attendance] primary fetch failed, retrying without photo include", error);
+    const fallbackParams: Prisma.AttendanceFindManyArgs = { ...params };
+    // omit photo include when schema/table is unavailable
+    if (fallbackParams.include) {
+      const restInclude = { ...(fallbackParams.include as Record<string, unknown>) };
+      delete (restInclude as Record<string, unknown>).photo;
+      fallbackParams.include = restInclude as Prisma.AttendanceFindManyArgs["include"];
+    }
+    try {
+      return (await prisma.attendance.findMany(fallbackParams)) as AttendanceRecord[];
+    } catch (secondaryError) {
+      console.error("[attendance] fallback fetch failed", secondaryError);
+      return [] as AttendanceRecord[];
+    }
   }
 }
 
@@ -245,349 +146,218 @@ async function safeFetchApprovals(params: Prisma.AttendanceApprovalFindManyArgs)
 async function deleteAttendance(formData: FormData) {
   "use server";
   const session = await getCurrentSession();
-  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) throw new Error("Unauthorized");
+
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) {
+    throw new Error("Unauthorized");
+  }
 
   const attendanceId = formData.get("attendanceId");
-  const returnTo = formData.get("returnTo");
 
-  if (!attendanceId || typeof attendanceId !== "string") throw new Error("勤怠IDが不明です");
+  if (!attendanceId || typeof attendanceId !== "string") {
+    throw new Error("勤怠IDが不明です");
+  }
 
   await prisma.attendance.delete({ where: { id: attendanceId } });
 
   revalidatePath("/dashboard/attendance");
-  if (typeof returnTo === "string" && returnTo) redirect(returnTo);
 }
 
 async function updateAttendance(formData: FormData) {
   "use server";
   const session = await getCurrentSession();
-  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) throw new Error("Unauthorized");
+
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) {
+    throw new Error("Unauthorized");
+  }
 
   const attendanceId = formData.get("attendanceId");
   const timestamp = formData.get("timestamp");
-  const returnTo = formData.get("returnTo");
+  const isCompanion = formData.get("isCompanion");
 
-  if (!attendanceId || typeof attendanceId !== "string") throw new Error("勤怠IDが不明です");
-  if (!timestamp || typeof timestamp !== "string") throw new Error("日時を指定してください");
+  if (!attendanceId || typeof attendanceId !== "string") {
+    throw new Error("勤怠IDが不明です");
+  }
 
-  const parsed = parseJstDateTimeLocal(timestamp);
-  if (Number.isNaN(parsed.getTime())) {
-    console.error("[attendance] invalid timestamp", { timestamp });
-    throw new Error("日時の形式が不正です");
+  if (!timestamp || typeof timestamp !== "string") {
+    throw new Error("日時を指定してください");
   }
 
   await prisma.attendance.update({
     where: { id: attendanceId },
-    data: { timestamp: parsed },
+    data: { timestamp: new Date(timestamp), isCompanion: Boolean(isCompanion) }
   });
 
   revalidatePath("/dashboard/attendance");
-  if (typeof returnTo === "string" && returnTo) redirect(returnTo);
-}
-
-async function upsertClockEvent(formData: FormData) {
-  "use server";
-  const session = await getCurrentSession();
-  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) throw new Error("Unauthorized");
-
-  const attendanceId = formData.get("attendanceId");
-  const staffId = formData.get("staffId");
-  const type = formData.get("type");
-  const timestamp = formData.get("timestamp");
-  const isCompanion = formData.get("isCompanion");
-  const returnTo = formData.get("returnTo");
-
-  if (!staffId || typeof staffId !== "string") throw new Error("スタッフIDが不明です");
-  if (!type || typeof type !== "string") throw new Error("種別が不明です");
-  if (!timestamp || typeof timestamp !== "string") throw new Error("日時を指定してください");
-  if (!["CLOCK_IN", "CLOCK_OUT"].includes(type)) throw new Error("出勤/退勤のみ編集可能です");
-
-  const parsed = parseJstDateTimeLocal(timestamp);
-  if (Number.isNaN(parsed.getTime())) {
-    console.error("[attendance] invalid timestamp", { timestamp });
-    throw new Error("日時の形式が不正です");
-  }
-
-  const defaultStore = await getOrCreateDefaultStore();
-  const storeId = session.user.storeId ?? defaultStore.id;
-
-  const staff = await prisma.user.findFirst({ where: { id: staffId, storeId } });
-  if (!staff) throw new Error("対象スタッフが見つかりません");
-
-  // ✅ 同伴は CLOCK_IN のみに適用
-  const companion = type === "CLOCK_IN" ? isCompanion === "on" : false;
-
-  const idStr = typeof attendanceId === "string" ? attendanceId : "";
-  const shouldCreate = !idStr || idStr.startsWith("new-");
-
-  if (shouldCreate) {
-    await prisma.attendance.create({
-      data: {
-        storeId,
-        userId: staffId,
-        type: type as AttendanceRecord["type"],
-        timestamp: parsed,
-        isCompanion: companion,
-      },
-    });
-  } else {
-    await prisma.attendance.update({
-      where: { id: idStr },
-      data: { timestamp: parsed, isCompanion: companion },
-    });
-  }
-
-  revalidatePath("/dashboard/attendance");
-  if (typeof returnTo === "string" && returnTo) redirect(returnTo);
-}
-
-async function createOwnerAttendance(formData: FormData) {
-  "use server";
-  const session = await getCurrentSession();
-  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) throw new Error("Unauthorized");
-
-  const staffId = formData.get("staffId");
-  const clockIn = formData.get("clockIn");
-  const clockOut = formData.get("clockOut");
-  const isCompanion = formData.get("isCompanion");
-  const returnTo = formData.get("returnTo");
-
-  if (!staffId || typeof staffId !== "string") throw new Error("スタッフを選択してください");
-  if (!clockIn || typeof clockIn !== "string") throw new Error("出勤時刻を指定してください");
-  if (!clockOut || typeof clockOut !== "string") throw new Error("退勤時刻を指定してください");
-
-  const inParsed = parseJstDateTimeLocal(clockIn);
-  const outParsed = parseJstDateTimeLocal(clockOut);
-
-  if (Number.isNaN(inParsed.getTime()) || Number.isNaN(outParsed.getTime())) throw new Error("日時の形式が不正です");
-
-  const defaultStore = await getOrCreateDefaultStore();
-  const storeId = session.user.storeId ?? defaultStore.id;
-
-  const staff = await prisma.user.findFirst({ where: { id: staffId, storeId } });
-  if (!staff) throw new Error("対象スタッフが見つかりません");
-
-  // ✅ 同伴は CLOCK_IN のみに適用
-  const companion = isCompanion === "on";
-
-  await prisma.attendance.createMany({
-    data: [
-      { storeId, userId: staffId, type: "CLOCK_IN", timestamp: inParsed, isCompanion: companion },
-      { storeId, userId: staffId, type: "CLOCK_OUT", timestamp: outParsed, isCompanion: false },
-    ],
-  });
-
-  revalidatePath("/dashboard/attendance");
-  if (typeof returnTo === "string" && returnTo) redirect(returnTo);
 }
 
 async function approveDay(formData: FormData) {
   "use server";
   const session = await getCurrentSession();
-  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) throw new Error("Unauthorized");
+
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) {
+    throw new Error("Unauthorized");
+  }
 
   const dateValue = formData.get("date");
-  const returnTo = formData.get("returnTo");
-  if (!dateValue || typeof dateValue !== "string") throw new Error("日付が不明です");
+  if (!dateValue || typeof dateValue !== "string") {
+    throw new Error("日付が不明です");
+  }
 
   const defaultStore = await getOrCreateDefaultStore();
   await updateDayApproval({
     storeId: session.user.storeId ?? defaultStore.id,
     date: new Date(dateValue),
     approved: true,
-    approverId: session.user.id,
+    approverId: session.user.id
   });
 
   revalidatePath("/dashboard/attendance");
-  if (typeof returnTo === "string" && returnTo) redirect(returnTo);
 }
 
 async function unapproveDay(formData: FormData) {
   "use server";
   const session = await getCurrentSession();
-  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) throw new Error("Unauthorized");
+
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) {
+    throw new Error("Unauthorized");
+  }
 
   const dateValue = formData.get("date");
-  const returnTo = formData.get("returnTo");
-  if (!dateValue || typeof dateValue !== "string") throw new Error("日付が不明です");
+  if (!dateValue || typeof dateValue !== "string") {
+    throw new Error("日付が不明です");
+  }
 
   const defaultStore = await getOrCreateDefaultStore();
   await updateDayApproval({
     storeId: session.user.storeId ?? defaultStore.id,
     date: new Date(dateValue),
     approved: false,
-    approverId: session.user.id,
+    approverId: session.user.id
   });
 
   revalidatePath("/dashboard/attendance");
-  if (typeof returnTo === "string" && returnTo) redirect(returnTo);
 }
 
 export default async function AttendancePage({ searchParams }: AttendancePageProps) {
   const session = await getCurrentSession();
-  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) redirect("/dashboard");
+
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) {
+    redirect("/dashboard");
+  }
 
   const defaultStore = await getOrCreateDefaultStore();
   const activeStoreId = session.user.storeId ?? defaultStore.id;
 
   try {
     await pruneOldAttendancePhotos();
-  } catch (e) {
-    console.warn("[attendance] pruneOldAttendancePhotos skipped", e);
-  }
 
-  try {
     const monthParam = searchParams?.month;
-    const monthYyyyMm = isYyyyMm(monthParam) ? monthParam! : format(toJstWallClockDate(new Date()), "yyyy-MM");
-
-    const { from: monthFromUtc, to: monthToUtc } = parseJstMonthRangeUtc(monthYyyyMm);
-    const monthStartJst = startOfDay(toJstWallClockDate(monthFromUtc));
-    const monthEndJst = addDays(startOfDay(toJstWallClockDate(monthToUtc)), -1);
-
+    const parsedMonth =
+      monthParam && /^\d{4}-\d{2}$/.test(monthParam) ? new Date(`${monthParam}-01`) : new Date();
+    const startDateParam = parseJstDateParam(searchParams?.startDate);
+    const endDateParam = parseJstDateParam(searchParams?.endDate);
+    const hasCustomRange = Boolean(startDateParam && endDateParam);
+    const hasDateInputs = Boolean(startDateParam || endDateParam);
+    const monthBase = hasCustomRange && startDateParam ? startDateParam : parsedMonth;
+    const monthStart = startOfMonth(monthBase);
+    const monthEnd = endOfMonth(monthStart);
+    const rangeStart = hasCustomRange && startDateParam ? startOfDay(startDateParam) : monthStart;
+    const rangeEnd =
+      hasCustomRange && endDateParam ? addDays(startOfDay(endDateParam), 1) : addDays(monthEnd, 1);
     const staffList = await prisma.user.findMany({
       where: { role: { in: ["CAST", "DRIVER"] }, isActive: true, storeId: activeStoreId },
-      orderBy: { displayName: "asc" },
+      orderBy: { displayName: "asc" }
     });
 
     const staffFilterParam = searchParams?.staffId;
     const selectedStaffId =
-      staffFilterParam && staffFilterParam !== "__all__" && staffList.some((s) => s.id === staffFilterParam)
+      staffFilterParam && staffFilterParam !== "__all__" && staffList.some((staff) => staff.id === staffFilterParam)
         ? staffFilterParam
         : undefined;
-
-    const staffSelectValue = selectedStaffId ?? "__all__";
 
     const attendances = await safeFetchAttendances({
       where: {
         storeId: activeStoreId,
-        timestamp: { gte: monthFromUtc, lt: monthToUtc },
-        ...(selectedStaffId ? { userId: selectedStaffId } : {}),
+        timestamp: { gte: rangeStart, lt: rangeEnd },
+        ...(selectedStaffId ? { userId: selectedStaffId } : {})
       },
-      include: { user: true, approvedBy: true }, // ✅ photoは別クエリ
-      orderBy: { timestamp: "asc" },
+      include: { user: true, approvedBy: true, photo: true },
+      orderBy: { timestamp: "asc" }
     });
 
-    // ✅ 写真は attendanceId で引く
-    const attendanceIds = attendances.map((a) => a.id);
-    const photos = attendanceIds.length
-      ? await prisma.attendancePhoto.findMany({
-          where: { storeId: activeStoreId, attendanceId: { in: attendanceIds } },
-          select: { attendanceId: true, photoUrl: true },
-        })
-      : [];
+    const approvals = await safeFetchApprovals({
+      where: {
+        storeId: activeStoreId,
+        date: { gte: startOfDay(rangeStart), lt: rangeEnd }
+      }
+    });
 
-    const photoByAttendanceId = photos.reduce<Record<string, string>>((acc, p) => {
-      acc[p.attendanceId] = p.photoUrl;
+    const calendarDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
+    const attendanceByDate = attendances.reduce<Record<string, AttendanceRecord[]>>((acc, record) => {
+      const key = format(record.timestamp, "yyyy-MM-dd");
+      acc[key] = acc[key] ? [...acc[key], record] : [record];
       return acc;
     }, {});
 
-    const approvals = await safeFetchApprovals({
-      where: { storeId: activeStoreId, date: { gte: monthFromUtc, lt: monthToUtc } },
-    });
-
-    const calendarDays = eachDayOfInterval({ start: monthStartJst, end: monthEndJst });
-
-/**
- * ✅ 重要：勤務実績は「出勤（CLOCK_IN）の日付」にまとめる
- * - 夜勤で退勤が翌日でも、出勤日（例：25日）に紐づける
- * - globalThis は使わない（Vercelでリクエスト跨ぎ汚染が起きるため）
- */
-const workKeyByUser: Record<string, string | undefined> = {};
-
-const attendanceByDate = attendances.reduce<Record<string, AttendanceRecord[]>>((acc, record) => {
-  // CLOCK_IN が来たら、その日付キーを「勤務日」として保持
-  if (record.type === "CLOCK_IN") {
-    workKeyByUser[record.userId] = jstDayKeyFromDate(record.timestamp);
-  }
-
-  // それ以外（CLOCK_OUT / BREAK）は「直近のCLOCK_IN日」に寄せる
-  // もしCLOCK_INが無い場合は自分の日付にフォールバック
-  const key = workKeyByUser[record.userId] ?? jstDayKeyFromDate(record.timestamp);
-
-  acc[key] = acc[key] ? [...acc[key], record] : [record];
-  return acc;
-}, {});
-
-
-
-    // approvals も JST日付キーで
     const approvalByDate = approvals.reduce<Record<string, boolean>>((acc, approval) => {
-      const key = jstDayKeyFromDate(approval.date);
+      const key = format(approval.date, "yyyy-MM-dd");
       acc[key] = approval.isApproved;
       return acc;
     }, {});
 
+    const totalRecords = attendances.length;
+    const approvedCount = attendances.filter((a) => a.approvedAt).length;
+
+    const staffSelectValue = selectedStaffId ?? "__all__";
     const selectedDayParam = searchParams?.day;
     const selectedDay =
-      isYyyyMmDd(selectedDayParam) && isValid(new Date(selectedDayParam!))
-        ? parseSelectedDayJstStart(selectedDayParam!)
-        : startOfDay(monthStartJst);
-
+      selectedDayParam && isValid(new Date(selectedDayParam))
+        ? startOfDay(new Date(selectedDayParam))
+        : startOfDay(hasCustomRange ? rangeStart : monthStart);
     const selectedDayKey = format(selectedDay, "yyyy-MM-dd");
     const selectedDayAttendances = attendanceByDate[selectedDayKey] ?? [];
     const hasSelectedDayRecords = selectedDayAttendances.length > 0;
 
     const groupedByStaff = selectedDayAttendances.reduce<
-      Record<
-        string,
-        {
-          staffName: string;
-          records: AttendanceRecord[];
-          isApproved: boolean;
-          isOwnerCreated: boolean;
-          companion: boolean;
-          clockInPhotoUrl?: string;
-        }
-      >
+      Record<string, { staffName: string; records: AttendanceRecord[]; isApproved: boolean }>
     >((acc, record) => {
       const key = record.userId;
       const existing = acc[key];
-
-      const updated = existing ? [...existing.records, record] : [record];
-      const sorted = updated.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-
-      const clockIn = sorted.find((r) => r.type === "CLOCK_IN") ?? null;
-      const clockInPhotoUrl = clockIn ? photoByAttendanceId[clockIn.id] : undefined;
-
-      const isOwnerCreated = Boolean(clockIn) && !clockInPhotoUrl;
-      const companion = Boolean(clockIn?.isCompanion);
-
+      const updatedRecords = existing ? [...existing.records, record] : [record];
       acc[key] = {
         staffName: record.user.displayName,
-        records: sorted,
-        isApproved: sorted.every((r) => Boolean(r.approvedAt)),
-        isOwnerCreated,
-        companion,
-        clockInPhotoUrl,
+        records: updatedRecords.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime()),
+        isApproved: updatedRecords.every((r) => Boolean(r.approvedAt))
       };
       return acc;
     }, {});
 
     const selectedDayApproved =
       approvalByDate[selectedDayKey] ??
-      (selectedDayAttendances.length > 0 && selectedDayAttendances.every((a) => Boolean(a.approvedAt)));
+      (selectedDayAttendances.length > 0 && selectedDayAttendances.every((attendance) => Boolean(attendance.approvedAt)));
 
-    const monthlySummary = await getMonthlyAttendanceSummary({
-      storeId: activeStoreId,
-      staffId: selectedStaffId,
-      year: Number(format(monthStartJst, "yyyy")),
-      month: Number(format(monthStartJst, "M")),
-    });
-
-    const monthlyCompanionCount =
-      selectedStaffId ? attendances.filter((a) => a.type === "CLOCK_IN" && a.isCompanion).length : 0;
-
-    const workingHoursLabel =
+    const summaryForPeriod = hasCustomRange
+      ? await getAttendanceSummaryForRange({
+          storeId: activeStoreId,
+          staffId: selectedStaffId,
+          startDate: rangeStart,
+          endDate: rangeEnd
+        })
+      : await getMonthlyAttendanceSummary({
+          storeId: activeStoreId,
+          staffId: selectedStaffId,
+          year: monthStart.getFullYear(),
+          month: monthStart.getMonth() + 1
+        });
+    const staffLabel =
       staffSelectValue === "__all__"
+        ? "全員"
+        : staffList.find((s) => s.id === staffSelectValue)?.displayName ?? "スタッフ";
+    const rangeLabel = hasCustomRange
+      ? `勤務時間合計（${format(rangeStart, "yyyy-MM-dd")}〜${format(addDays(rangeEnd, -1), "yyyy-MM-dd")} / ${staffLabel}）`
+      : staffSelectValue === "__all__"
         ? "勤務時間合計（全員）"
-        : `勤務時間合計（${staffList.find((s) => s.id === staffSelectValue)?.displayName ?? "スタッフ"}）`;
-
-    const dateTimeInputClass = "md:w-64 [color-scheme:dark]";
-    const monthInputClass = "[color-scheme:dark]";
-    const nativeSelectClass =
-      "h-10 w-full rounded-md border border-slate-800 bg-slate-950/50 px-3 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-pink-500/40";
-
-    const returnTo = `/dashboard/attendance?month=${monthYyyyMm}&staffId=${staffSelectValue}&day=${selectedDayKey}`;
+        : `勤務時間合計（${staffLabel}）`;
 
     return (
       <div className="space-y-8">
@@ -599,26 +369,53 @@ const attendanceByDate = attendances.reduce<Record<string, AttendanceRecord[]>>(
             <CardDescription>{defaultStore.name} の勤怠を月単位で確認します。</CardDescription>
           </CardHeader>
           <CardContent>
-            <form className="grid gap-4 sm:grid-cols-3 sm:items-end" method="get">
+            <form className="grid gap-4 sm:grid-cols-5" method="get">
               <div className="space-y-2">
                 <Label htmlFor="month">月</Label>
-                <Input id="month" name="month" type="month" defaultValue={monthYyyyMm} className={monthInputClass} />
+                <Input
+                  id="month"
+                  name="month"
+                  type="month"
+                  defaultValue={format(monthStart, "yyyy-MM")}
+                  disabled={hasDateInputs}
+                />
               </div>
-
               <div className="space-y-2">
-                <Label htmlFor="staffId">スタッフ</Label>
-                <select id="staffId" name="staffId" defaultValue={staffSelectValue} className={nativeSelectClass}>
-                  <option value="__all__">全員</option>
-                  {staffList.map((staff) => (
-                    <option key={staff.id} value={staff.id}>
-                      {staff.displayName}
-                    </option>
-                  ))}
-                </select>
+                <Label htmlFor="startDate">開始日</Label>
+                <Input
+                  id="startDate"
+                  name="startDate"
+                  type="date"
+                  defaultValue={startDateParam ? format(startDateParam, "yyyy-MM-dd") : ""}
+                />
               </div>
-
-              <div className="flex justify-end">
-                <Button type="submit" size="sm" className="min-w-[96px]">
+              <div className="space-y-2">
+                <Label htmlFor="endDate">終了日</Label>
+                <Input
+                  id="endDate"
+                  name="endDate"
+                  type="date"
+                  defaultValue={endDateParam ? format(endDateParam, "yyyy-MM-dd") : ""}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>スタッフ</Label>
+                <Select name="staffId" defaultValue={staffSelectValue}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="全員" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">全員</SelectItem>
+                    {staffList.map((staff) => (
+                      <SelectItem key={staff.id} value={staff.id}>
+                        {staff.displayName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-end">
+                <Button type="submit" size="sm">
                   表示
                 </Button>
               </div>
@@ -626,325 +423,28 @@ const attendanceByDate = attendances.reduce<Record<string, AttendanceRecord[]>>(
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>{workingHoursLabel}</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-wrap items-end justify-between gap-3">
-            <div className="text-3xl font-bold text-pink-300">
-              {monthlySummary.roundedHours} 時間 {monthlySummary.roundedRemainderMinutes} 分
-            </div>
-
-            {selectedStaffId ? (
-              <div className="rounded-full border border-slate-700/60 bg-black/30 px-3 py-1 text-sm text-slate-200">
-                同伴：{monthlyCompanionCount} 回
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-            <div>
-              <CardTitle>{format(selectedDay, "yyyy-MM-dd (E)", { locale: ja })} の勤怠詳細</CardTitle>
-              <CardDescription>
-                {selectedDayApproved
-                  ? "承認済みです（※編集・削除の制限はありません）"
-                  : "未承認です（※編集・削除の制限はありません）"}
-              </CardDescription>
-            </div>
-
-            {hasSelectedDayRecords ? (
-              <div className="flex gap-2">
-                {selectedDayApproved ? (
-                  <form action={unapproveDay}>
-                    <input type="hidden" name="date" value={selectedDay.toISOString()} />
-                    <input type="hidden" name="returnTo" value={returnTo} />
-                    <Button type="submit" variant="secondary" size="sm">
-                      承認取消
-                    </Button>
-                  </form>
-                ) : (
-                  <form action={approveDay}>
-                    <input type="hidden" name="date" value={selectedDay.toISOString()} />
-                    <input type="hidden" name="returnTo" value={returnTo} />
-                    <Button type="submit" size="sm">
-                      承認
-                    </Button>
-                  </form>
-                )}
-              </div>
-            ) : null}
-          </CardHeader>
-
-          <CardContent className="space-y-4">
-            <div className="rounded-lg border border-slate-800/60 bg-black/30 p-4">
-              <p className="text-sm font-semibold text-slate-100">勤務データを作成（オーナー作成：写真なし）</p>
-              <p className="mt-1 text-xs text-slate-400">
-                データが無い日でも、既にデータがある日でも作成できます。重複した場合は下の「削除」で個別に整理できます。
-              </p>
-
-              <form action={createOwnerAttendance} className="mt-4 grid gap-3 lg:grid-cols-5 lg:items-end">
-                <input type="hidden" name="returnTo" value={returnTo} />
-
-                <div className="space-y-2 lg:col-span-2">
-                  <Label className="text-xs text-slate-400">スタッフ</Label>
-                  <select
-                    name="staffId"
-                    defaultValue={selectedStaffId ?? (staffList[0]?.id ?? "")}
-                    className={nativeSelectClass}
-                    required
-                  >
-                    {staffList.map((staff) => (
-                      <option key={staff.id} value={staff.id}>
-                        {staff.displayName}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-xs text-slate-400">出勤</Label>
-                  <Input type="datetime-local" name="clockIn" required className={dateTimeInputClass} />
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-xs text-slate-400">退勤</Label>
-                  <Input type="datetime-local" name="clockOut" required className={dateTimeInputClass} />
-                </div>
-
-                <div className="flex items-center justify-between gap-3 lg:justify-end">
-                  <div className="flex items-center gap-2 pt-1 text-xs text-slate-200">
-                    <input
-                      type="checkbox"
-                      id="owner-create-companion"
-                      name="isCompanion"
-                      className="h-4 w-4 rounded border border-slate-700 bg-black text-pink-400 focus-visible:outline-none"
-                    />
-                    <Label htmlFor="owner-create-companion">同伴（出勤のみ）</Label>
-                  </div>
-
-                  <Button type="submit" size="sm" className="min-w-[88px]">
-                    保存
-                  </Button>
-                </div>
-              </form>
-            </div>
-
-            {selectedDayAttendances.length === 0 ? (
-              <p className="text-sm text-slate-400">勤怠記録がありません。</p>
-            ) : (
-              <ul className="space-y-3 text-sm">
-                {Object.entries(groupedByStaff).map(([staffId, group]) => {
-                  const summary = buildDaySummary(group.records);
-
-                  const clockInRecord = group.records.find((r) => r.type === "CLOCK_IN") ?? null;
-                  const clockOutRecord = [...group.records].reverse().find((r) => r.type === "CLOCK_OUT") ?? null;
-
-                  return (
-                    <li key={staffId} className="space-y-3 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div className="space-y-2">
-                          <div>
-                            <p className="text-base font-semibold text-pink-200">{group.staffName}</p>
-                            <div className="mt-1 flex flex-wrap items-center gap-2">
-                              <p className="text-xs text-slate-400">{group.isApproved ? "承認済み" : "未承認"}</p>
-
-                              {group.isOwnerCreated ? (
-                                <span className="rounded-full bg-slate-800/70 px-2 py-1 text-[11px] text-slate-200">
-                                  オーナー作成（写真なし）
-                                </span>
-                              ) : null}
-
-                              {group.companion ? (
-                                <span className="rounded-full bg-pink-900/40 px-2 py-1 text-[11px] text-pink-200">
-                                  同伴（出勤）
-                                </span>
-                              ) : null}
-                            </div>
-                          </div>
-
-                          {group.clockInPhotoUrl ? (
-                            <a
-                              href={group.clockInPhotoUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="block w-fit rounded-lg border border-slate-800/60 bg-black/40 p-2"
-                            >
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={group.clockInPhotoUrl}
-                                alt="出勤写真"
-                                className="h-32 w-32 rounded-md object-cover"
-                                loading="lazy"
-                              />
-                              <p className="mt-1 text-[11px] text-slate-400">出勤写真（クリックで拡大）</p>
-                            </a>
-                          ) : null}
-                        </div>
-
-                        <div className="text-right text-xs text-slate-400">
-                          出勤時間：{summary.clockInJst ? format(summary.clockInJst, "HH:mm") : "—"}
-                          <br />
-                          退勤時間：{summary.clockOutJst ? format(summary.clockOutJst, "HH:mm") : "未退勤"}
-                          <br />
-                          結果：{`${Math.floor(summary.workingMinutes / 60)}時間${summary.workingMinutes % 60}分`}
-                        </div>
-                      </div>
-
-                      <details className="rounded-lg border border-slate-800/60 bg-black/40 p-3">
-                        <summary className="cursor-pointer text-xs text-slate-400">
-                          詳細を開く（出勤/退勤の作成・編集 / 個別打刻・休憩編集）
-                        </summary>
-
-                        <div className="mt-3 space-y-3">
-                          <div className="space-y-2 rounded-md border border-slate-800/70 bg-slate-950/50 p-3">
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="text-xs text-slate-300">出勤（CLOCK_IN）</p>
-                              {clockInRecord ? (
-                                <form action={deleteAttendance}>
-                                  <input type="hidden" name="attendanceId" value={clockInRecord.id} />
-                                  <input type="hidden" name="returnTo" value={returnTo} />
-                                  <Button type="submit" size="sm" variant="destructive">
-                                    削除
-                                  </Button>
-                                </form>
-                              ) : null}
-                            </div>
-
-                            <form action={upsertClockEvent} className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
-                              <input type="hidden" name="returnTo" value={returnTo} />
-                              <input type="hidden" name="attendanceId" value={clockInRecord ? clockInRecord.id : "new-CLOCK_IN"} />
-                              <input type="hidden" name="staffId" value={staffId} />
-                              <input type="hidden" name="type" value="CLOCK_IN" />
-
-                              <div className="space-y-1">
-                                <Label className="text-xs text-slate-400">時刻</Label>
-                                <Input
-                                  type="datetime-local"
-                                  name="timestamp"
-                                  required
-                                  defaultValue={clockInRecord ? format(toJstWallClockDate(clockInRecord.timestamp), "yyyy-MM-dd'T'HH:mm") : ""}
-                                  className={dateTimeInputClass}
-                                />
-                              </div>
-
-                              <div className="flex items-center gap-2 pt-5 text-xs text-slate-200">
-                                <input
-                                  type="checkbox"
-                                  id={`clockin-companion-${staffId}`}
-                                  name="isCompanion"
-                                  defaultChecked={clockInRecord?.isCompanion ?? false}
-                                  className="h-4 w-4 rounded border border-slate-700 bg-black text-pink-400 focus-visible:outline-none"
-                                />
-                                <Label htmlFor={`clockin-companion-${staffId}`}>同伴</Label>
-                              </div>
-
-                              <Button type="submit" size="sm" variant="secondary" className="md:mt-5">
-                                更新
-                              </Button>
-                            </form>
-                          </div>
-
-                          <div className="space-y-2 rounded-md border border-slate-800/70 bg-slate-950/50 p-3">
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="text-xs text-slate-300">退勤（CLOCK_OUT）</p>
-                              {clockOutRecord ? (
-                                <form action={deleteAttendance}>
-                                  <input type="hidden" name="attendanceId" value={clockOutRecord.id} />
-                                  <input type="hidden" name="returnTo" value={returnTo} />
-                                  <Button type="submit" size="sm" variant="destructive">
-                                    削除
-                                  </Button>
-                                </form>
-                              ) : null}
-                            </div>
-
-                            <form action={upsertClockEvent} className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
-                              <input type="hidden" name="returnTo" value={returnTo} />
-                              <input type="hidden" name="attendanceId" value={clockOutRecord ? clockOutRecord.id : "new-CLOCK_OUT"} />
-                              <input type="hidden" name="staffId" value={staffId} />
-                              <input type="hidden" name="type" value="CLOCK_OUT" />
-
-                              <div className="space-y-1">
-                                <Label className="text-xs text-slate-400">時刻</Label>
-                                <Input
-                                  type="datetime-local"
-                                  name="timestamp"
-                                  required
-                                  defaultValue={clockOutRecord ? format(toJstWallClockDate(clockOutRecord.timestamp), "yyyy-MM-dd'T'HH:mm") : ""}
-                                  className={dateTimeInputClass}
-                                />
-                              </div>
-
-                              <Button type="submit" size="sm" variant="secondary" className="md:mt-5">
-                                更新
-                              </Button>
-                            </form>
-                          </div>
-
-                          {group.records.filter((r) => !["CLOCK_IN", "CLOCK_OUT"].includes(r.type)).length === 0 ? (
-                            <p className="text-xs text-slate-500">休憩などの追加レコードはありません。</p>
-                          ) : (
-                            group.records
-                              .filter((r) => !["CLOCK_IN", "CLOCK_OUT"].includes(r.type))
-                              .map((attendance) => {
-                                const jstTimestamp = toJstWallClockDate(attendance.timestamp);
-                                return (
-                                  <div key={attendance.id} className="space-y-2 rounded-md border border-slate-800/70 bg-slate-950/50 p-3">
-                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                      <div>
-                                        <p className="text-xs text-slate-400">
-                                          {format(jstTimestamp, "HH:mm", { locale: ja })} /{" "}
-                                          {attendanceLabels[attendance.type] ?? attendance.type}
-                                        </p>
-                                        <p className="text-xs text-slate-500">
-                                          {attendance.approvedAt
-                                            ? `承認済 (${format(toJstWallClockDate(attendance.approvedAt), "MM/dd HH:mm")})`
-                                            : "未承認"}
-                                        </p>
-                                      </div>
-
-                                      <form action={deleteAttendance}>
-                                        <input type="hidden" name="attendanceId" value={attendance.id} />
-                                        <input type="hidden" name="returnTo" value={returnTo} />
-                                        <Button type="submit" size="sm" variant="destructive">
-                                          削除
-                                        </Button>
-                                      </form>
-                                    </div>
-
-                                    <form action={updateAttendance} className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
-                                      <input type="hidden" name="attendanceId" value={attendance.id} />
-                                      <input type="hidden" name="returnTo" value={returnTo} />
-
-                                      <div className="space-y-1">
-                                        <Label className="text-xs text-slate-400">時刻</Label>
-                                        <Input
-                                          type="datetime-local"
-                                          name="timestamp"
-                                          defaultValue={format(jstTimestamp, "yyyy-MM-dd'T'HH:mm")}
-                                          className={dateTimeInputClass}
-                                        />
-                                      </div>
-
-                                      <Button type="submit" size="sm" variant="secondary" className="md:mt-5">
-                                        更新
-                                      </Button>
-                                    </form>
-                                  </div>
-                                );
-                              })
-                          )}
-                        </div>
-                      </details>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
+        <div className="grid gap-6 lg:grid-cols-3">
+          <Card>
+            <CardHeader>
+              <CardTitle>記録件数</CardTitle>
+            </CardHeader>
+            <CardContent className="text-3xl font-bold text-pink-300">{totalRecords} 件</CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>承認済み</CardTitle>
+            </CardHeader>
+            <CardContent className="text-3xl font-bold text-pink-300">{approvedCount} 件</CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>{rangeLabel}</CardTitle>
+            </CardHeader>
+            <CardContent className="text-3xl font-bold text-pink-300">
+              {summaryForPeriod.roundedHours} 時間 {summaryForPeriod.roundedRemainderMinutes} 分
+            </CardContent>
+          </Card>
+        </div>
 
         <Card>
           <CardHeader>
@@ -953,17 +453,26 @@ const attendanceByDate = attendances.reduce<Record<string, AttendanceRecord[]>>(
           </CardHeader>
           <CardContent>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
-              {calendarDays.map((dayJst) => {
-                const key = format(dayJst, "yyyy-MM-dd");
+              {calendarDays.map((day) => {
+                const key = format(day, "yyyy-MM-dd");
                 const dayAttendances = attendanceByDate[key] ?? [];
                 const uniqueNames = Array.from(new Set(dayAttendances.map((a) => a.user.displayName)));
                 const approved = approvalByDate[key];
                 const isSelected = key === selectedDayKey;
 
+                const calendarParams = new URLSearchParams();
+                calendarParams.set("month", format(monthStart, "yyyy-MM"));
+                calendarParams.set("staffId", staffSelectValue);
+                calendarParams.set("day", key);
+                if (hasCustomRange && startDateParam && endDateParam) {
+                  calendarParams.set("startDate", format(startDateParam, "yyyy-MM-dd"));
+                  calendarParams.set("endDate", format(endDateParam, "yyyy-MM-dd"));
+                }
+
                 return (
                   <Link
                     key={key}
-                    href={`/dashboard/attendance?month=${monthYyyyMm}&staffId=${staffSelectValue}&day=${key}`}
+                    href={`/dashboard/attendance?${calendarParams.toString()}`}
                     className="focus-visible:outline-none"
                   >
                     <div
@@ -972,29 +481,183 @@ const attendanceByDate = attendances.reduce<Record<string, AttendanceRecord[]>>(
                       }`}
                     >
                       <div className="flex items-baseline justify-between">
-                        <p className="text-sm font-semibold text-pink-200">{format(dayJst, "M/d")}</p>
-                        <p className="text-[11px] text-slate-500">{format(dayJst, "EEE", { locale: ja })}</p>
+                        <p className="text-sm font-semibold text-pink-200">{format(day, "M/d")}</p>
+                        <p className="text-[11px] text-slate-500">{format(day, "EEE", { locale: ja })}</p>
                       </div>
-
                       {approved ? (
-                        <p className="mt-1 rounded-full bg-pink-900/50 px-2 py-1 text-[11px] text-pink-200">
-                          承認済
-                        </p>
+                        <p className="mt-1 rounded-full bg-pink-900/50 px-2 py-1 text-[11px] text-pink-200">承認済</p>
                       ) : null}
-
                       <div className="mt-2 space-y-1">
                         {uniqueNames.length === 0 ? (
                           <p className="text-slate-600">出勤なし</p>
                         ) : (
                           uniqueNames.slice(0, 2).map((name) => <p key={name}>{name}</p>)
                         )}
-                        {uniqueNames.length > 2 ? <p className="text-slate-500">+{uniqueNames.length - 2} 名</p> : null}
+                        {uniqueNames.length > 2 ? (
+                          <p className="text-slate-500">+{uniqueNames.length - 2} 名</p>
+                        ) : null}
                       </div>
                     </div>
                   </Link>
                 );
               })}
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <CardTitle>{format(selectedDay, "yyyy-MM-dd (E)", { locale: ja })} の勤怠詳細</CardTitle>
+              <CardDescription>
+                {selectedDayApproved ? "承認済みです" : "未承認です。必要に応じて承認してください。"}
+              </CardDescription>
+            </div>
+            {hasSelectedDayRecords ? (
+              <div className="flex gap-2">
+                {selectedDayApproved ? (
+                  <form action={unapproveDay}>
+                    <input type="hidden" name="date" value={selectedDay.toISOString()} />
+                    <Button type="submit" variant="secondary" size="sm">
+                      承認取消
+                    </Button>
+                  </form>
+                ) : (
+                  <form action={approveDay}>
+                    <input type="hidden" name="date" value={selectedDay.toISOString()} />
+                    <Button type="submit" size="sm">
+                      承認
+                    </Button>
+                  </form>
+                )}
+              </div>
+            ) : null}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {selectedDayAttendances.length === 0 ? (
+              <p className="text-sm text-slate-400">勤怠記録がありません。</p>
+            ) : (
+              <ul className="space-y-3 text-sm">
+                {Object.entries(groupedByStaff).map(([staffId, group]) => {
+                  const summary = buildDaySummary(group.records);
+                  const approvedLabel = group.isApproved ? "承認済み" : "未承認";
+                  const clockInPhotos = group.records.filter(
+                    (record) => record.type === "CLOCK_IN" && record.photo
+                  );
+
+                  return (
+                    <li key={staffId} className="space-y-3 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-base font-semibold text-pink-200">{group.staffName}</p>
+                          <p className="text-xs text-slate-400">{approvedLabel}</p>
+                        </div>
+                        <div className="text-right text-xs text-slate-400">
+                          出勤時間：
+                          {summary.clockInJst ? format(summary.clockInJst, "HH:mm") : "—"}
+                          <br />
+                          退勤時間：
+                          {summary.clockOutJst ? format(summary.clockOutJst, "HH:mm") : "未退勤"}
+                          <br />
+                          結果：
+                          {`${Math.floor(summary.workingMinutes / 60)}時間${summary.workingMinutes % 60}分`}
+                        </div>
+                      </div>
+
+                      {clockInPhotos.length > 0 ? (
+                        <div className="rounded-lg border border-slate-800/70 bg-black/30 p-3">
+                          <p className="text-xs text-slate-300">出勤写真</p>
+                          <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                            {clockInPhotos.map((record) => (
+                              <a
+                                key={record.id}
+                                href={record.photo?.photoUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="group overflow-hidden rounded-lg border border-slate-800/60 bg-slate-950/40"
+                              >
+                                {record.photo?.photoUrl ? (
+                                  <img
+                                    src={record.photo.photoUrl}
+                                    alt={`${group.staffName} 出勤時の写真`}
+                                    className="h-32 w-full object-cover transition duration-200 group-hover:opacity-90"
+                                  />
+                                ) : null}
+                                <p className="px-2 py-1 text-[11px] text-slate-300">
+                                  {format(toJst(record.timestamp), "HH:mm", { locale: ja })}
+                                </p>
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <details className="rounded-lg border border-slate-800/60 bg-black/40 p-3">
+                        <summary className="cursor-pointer text-xs text-slate-400">詳細を開く（個別の打刻・休憩・同伴編集）</summary>
+                        <div className="mt-3 space-y-3">
+                          {group.records.map((attendance) => {
+                            const jstTimestamp = toJst(attendance.timestamp);
+
+                            return (
+                              <div key={attendance.id} className="space-y-2 rounded-md border border-slate-800/70 bg-slate-950/50 p-3">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                  <div>
+                                    <p className="text-xs text-slate-400">
+                                      {format(jstTimestamp, "HH:mm", { locale: ja })} / {" "}
+                                      {attendanceLabels[attendance.type] ?? attendance.type}
+                                    </p>
+                                    <p className="text-xs text-slate-400">同伴: {attendance.isCompanion ? "はい" : "いいえ"}</p>
+                                    <p className="text-xs text-slate-500">
+                                      {attendance.approvedAt
+                                        ? `承認済 (${format(toJst(attendance.approvedAt), "MM/dd HH:mm")})`
+                                        : "未承認"}
+                                    </p>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <form action={deleteAttendance}>
+                                      <input type="hidden" name="attendanceId" value={attendance.id} />
+                                      <Button type="submit" size="sm" variant="destructive">
+                                        削除
+                                      </Button>
+                                    </form>
+                                  </div>
+                                </div>
+                                <form action={updateAttendance} className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
+                                  <input type="hidden" name="attendanceId" value={attendance.id} />
+                                  <div className="space-y-1">
+                                    <Label className="text-xs text-slate-400">時刻</Label>
+                                    <Input
+                                      type="datetime-local"
+                                      name="timestamp"
+                                      defaultValue={format(jstTimestamp, "yyyy-MM-dd'T'HH:mm")}
+                                      className="md:w-64"
+                                    />
+                                  </div>
+                                  <div className="flex items-center gap-2 pt-5 text-xs text-slate-200">
+                                    <input
+                                      type="checkbox"
+                                      id={`companion-${attendance.id}`}
+                                      name="isCompanion"
+                                      defaultChecked={attendance.isCompanion}
+                                      className="h-4 w-4 rounded border border-slate-700 bg-black text-pink-400 focus-visible:outline-none"
+                                    />
+                                    <Label htmlFor={`companion-${attendance.id}`}>同伴</Label>
+                                  </div>
+                                  <Button type="submit" size="sm" variant="secondary" className="md:mt-5">
+                                    更新
+                                  </Button>
+                                </form>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </details>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
           </CardContent>
         </Card>
       </div>
