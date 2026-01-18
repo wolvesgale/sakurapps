@@ -32,7 +32,7 @@ async function createRide(formData: FormData) {
     data: {
       note,
       driverId: session.user.id,
-      storeId: typeof storeId === "string" && storeId.length > 0 ? storeId : null
+      storeId: typeof storeId === "string" && storeId !== "__none__" ? storeId : null
     }
   });
 
@@ -134,7 +134,23 @@ export default async function DashboardPage() {
   }
 
   if (session.user.role === "OWNER") {
-    const data = await getOwnerData();
+    let data;
+    try {
+      data = await getOwnerData();
+    } catch (error) {
+      console.error("[dashboard] owner view", error);
+      return (
+        <Card className="border-red-900/40 bg-red-950/30 text-sm text-red-100">
+          <CardHeader>
+            <CardTitle>データ取得に失敗しました</CardTitle>
+            <CardDescription>時間をおいて再度お試しください。</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p>売上・出勤情報を読み込めませんでした。</p>
+          </CardContent>
+        </Card>
+      );
+    }
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-semibold text-pink-300">オーナーダッシュボード</h1>
@@ -192,7 +208,23 @@ export default async function DashboardPage() {
   }
 
   if (session.user.role === "ADMIN" && session.user.storeId) {
-    const data = await getAdminData(session.user.storeId);
+    let data;
+    try {
+      data = await getAdminData(session.user.storeId);
+    } catch (error) {
+      console.error("[dashboard] admin view", error);
+      return (
+        <Card className="border-red-900/40 bg-red-950/30 text-sm text-red-100">
+          <CardHeader>
+            <CardTitle>データ取得に失敗しました</CardTitle>
+            <CardDescription>時間をおいて再度お試しください。</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p>売上・出勤情報を読み込めませんでした。</p>
+          </CardContent>
+        </Card>
+      );
+    }
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-semibold text-pink-300">店舗ダッシュボード</h1>
@@ -246,7 +278,23 @@ export default async function DashboardPage() {
   }
 
   if (session.user.role === "DRIVER") {
-    const data = await getDriverData(session.user.id);
+    let data;
+    try {
+      data = await getDriverData(session.user.id);
+    } catch (error) {
+      console.error("[dashboard] driver view", error);
+      return (
+        <Card className="border-red-900/40 bg-red-950/30 text-sm text-red-100">
+          <CardHeader>
+            <CardTitle>データ取得に失敗しました</CardTitle>
+            <CardDescription>時間をおいて再度お試しください。</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p>送迎記録を読み込めませんでした。</p>
+          </CardContent>
+        </Card>
+      );
+    }
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-semibold text-pink-300">ドライバー送迎履歴</h1>
@@ -260,22 +308,22 @@ export default async function DashboardPage() {
                 <Label htmlFor="note">内容</Label>
                 <Input id="note" name="note" required placeholder="お客様送迎メモ" />
               </div>
-              <div className="space-y-2 sm:col-span-2">
-                <Label>店舗 (任意)</Label>
-                <Select name="storeId" defaultValue="">
-                  <SelectTrigger>
-                    <SelectValue placeholder="店舗を選択" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="">未選択</SelectItem>
-                    {data.stores.map((store) => (
-                      <SelectItem key={store.id} value={store.id}>
-                        {store.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label>店舗 (任意)</Label>
+              <Select name="storeId" defaultValue="__none__">
+                <SelectTrigger>
+                  <SelectValue placeholder="店舗を選択" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">未選択</SelectItem>
+                  {data.stores.map((store) => (
+                    <SelectItem key={store.id} value={store.id}>
+                      {store.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
               <Button type="submit" className="sm:col-span-2">
                 送迎を記録
               </Button>
