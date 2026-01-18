@@ -306,8 +306,6 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
     }, {});
 
     const totalRecords = attendances.length;
-    const approvedCount = attendances.filter((a) => a.approvedAt).length;
-
     const staffSelectValue = selectedStaffId ?? "__all__";
     const selectedDayParam = searchParams?.day;
     const selectedDay =
@@ -426,22 +424,11 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
         <div className="grid gap-6 lg:grid-cols-3">
           <Card>
             <CardHeader>
-              <CardTitle>記録件数</CardTitle>
-            </CardHeader>
-            <CardContent className="text-3xl font-bold text-pink-300">{totalRecords} 件</CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>承認済み</CardTitle>
-            </CardHeader>
-            <CardContent className="text-3xl font-bold text-pink-300">{approvedCount} 件</CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
               <CardTitle>{rangeLabel}</CardTitle>
             </CardHeader>
             <CardContent className="text-3xl font-bold text-pink-300">
               {summaryForPeriod.roundedHours} 時間 {summaryForPeriod.roundedRemainderMinutes} 分
+              <p className="mt-2 text-sm font-medium text-slate-300">記録件数: {totalRecords} 件</p>
             </CardContent>
           </Card>
         </div>
