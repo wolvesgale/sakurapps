@@ -202,6 +202,14 @@ export function TerminalScreen() {
       setStatusMessage("出勤時の写真を撮影してください");
       return;
     }
+    if (!store?.id) {
+      setStatusMessage("店舗情報が取得できていません");
+      return;
+    }
+    if (type === "CLOCK_IN" && !photoUrl) {
+      setStatusMessage("出勤時の写真を撮影してください");
+      return;
+    }
 
     setIsSubmitting(true);
     setStatusMessage(null);
