@@ -190,6 +190,42 @@ async function updateAttendance(formData: FormData) {
   revalidatePath("/dashboard/attendance");
 }
 
+async function addAttendanceRecord(formData: FormData) {
+  "use server";
+  const session = await getCurrentSession();
+
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) {
+    throw new Error("Unauthorized");
+  }
+
+  const userId = formData.get("userId");
+  const storeId = formData.get("storeId");
+  const type = formData.get("type");
+  const timestamp = formData.get("timestamp");
+
+  if (!userId || typeof userId !== "string") throw new Error("スタッフIDが不明です");
+  if (!storeId || typeof storeId !== "string") throw new Error("店舗IDが不明です");
+  if (!type || typeof type !== "string") throw new Error("種別を指定してください");
+  if (!timestamp || typeof timestamp !== "string") throw new Error("日時を指定してください");
+
+  const validTypes = ["CLOCK_IN", "CLOCK_OUT", "BREAK_START", "BREAK_END"];
+  if (!validTypes.includes(type)) throw new Error("無効な種別です");
+
+  await prisma.attendance.create({
+    data: {
+      userId,
+      storeId,
+      type: type as "CLOCK_IN" | "CLOCK_OUT" | "BREAK_START" | "BREAK_END",
+      timestamp: new Date(timestamp),
+      isCompanion: false,
+      approvedById: session.user.id,
+      approvedAt: new Date()
+    }
+  });
+
+  revalidatePath("/dashboard/attendance");
+}
+
 async function approveDay(formData: FormData) {
   "use server";
   const session = await getCurrentSession();
@@ -544,7 +580,9 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                           {summary.clockInJst ? format(summary.clockInJst, "HH:mm") : "—"}
                           <br />
                           退勤時間：
-                          {summary.clockOutJst ? format(summary.clockOutJst, "HH:mm") : "未退勤"}
+                          {summary.clockOutJst ? format(summary.clockOutJst, "HH:mm") : (
+                            <span className="font-semibold text-amber-400">未退勤</span>
+                          )}
                           <br />
                           結果：
                           {`${Math.floor(summary.workingMinutes / 60)}時間${summary.workingMinutes % 60}分`}
@@ -637,6 +675,40 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                               </div>
                             );
                           })}
+
+                          {/* 打刻追加フォーム */}
+                          <div className="rounded-md border border-dashed border-slate-700 bg-slate-950/30 p-3">
+                            <p className="mb-2 text-xs font-medium text-slate-300">打刻を追加（管理者修正）</p>
+                            <form action={addAttendanceRecord} className="flex flex-col gap-3 md:flex-row md:items-end md:gap-4">
+                              <input type="hidden" name="userId" value={staffId} />
+                              <input type="hidden" name="storeId" value={activeStoreId} />
+                              <div className="space-y-1">
+                                <Label className="text-xs text-slate-400">種別</Label>
+                                <select
+                                  name="type"
+                                  defaultValue="CLOCK_OUT"
+                                  className="flex h-9 w-full rounded-md border border-slate-700 bg-black px-3 py-1 text-xs text-slate-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-pink-500 md:w-36"
+                                >
+                                  <option value="CLOCK_OUT">退勤</option>
+                                  <option value="CLOCK_IN">出勤</option>
+                                  <option value="BREAK_START">休憩開始</option>
+                                  <option value="BREAK_END">休憩終了</option>
+                                </select>
+                              </div>
+                              <div className="space-y-1">
+                                <Label className="text-xs text-slate-400">日時</Label>
+                                <Input
+                                  type="datetime-local"
+                                  name="timestamp"
+                                  defaultValue={format(selectedDay, "yyyy-MM-dd'T'23:00")}
+                                  className="md:w-64"
+                                />
+                              </div>
+                              <Button type="submit" size="sm" className="bg-pink-700 hover:bg-pink-600 text-white">
+                                追加
+                              </Button>
+                            </form>
+                          </div>
                         </div>
                       </details>
                     </li>
