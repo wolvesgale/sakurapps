@@ -16,7 +16,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { getOrCreateDefaultStore } from "@/lib/store";
-import { getAttendanceSummaryForRange, getMonthlyAttendanceSummary, updateDayApproval } from "@/lib/attendance";
+import { getAttendanceSummaryForRange, getMonthlyAttendanceSummary, updateDayApproval, NIGHT_CUTOFF_HOUR } from "@/lib/attendance";
 import { pruneOldAttendancePhotos } from "@/lib/attendance-photo";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,25 @@ const attendanceLabels: Record<string, string> = {
 const TZ = "Asia/Tokyo";
 
 const toJst = (date: Date) => new Date(date.toLocaleString("en-US", { timeZone: TZ }));
+
+/**
+ * タイムスタンプから「営業日」キー（yyyy-MM-dd）を返す。
+ * JST で NIGHT_CUTOFF_HOUR 時より前の打刻は前日営業日扱い。
+ */
+const getBusinessDateKey = (timestamp: Date): string => {
+  const jst = toJst(timestamp);
+  if (jst.getHours() < NIGHT_CUTOFF_HOUR) {
+    const prev = new Date(jst);
+    prev.setDate(prev.getDate() - 1);
+    return format(prev, "yyyy-MM-dd");
+  }
+  return format(jst, "yyyy-MM-dd");
+};
+
+/**
+ * datetime-local 入力値（"yyyy-MM-ddTHH:mm"）を JST として解釈して Date を返す。
+ */
+const parseJstDatetimeLocal = (value: string): Date => new Date(`${value}:00+09:00`);
 
 const parseJstDateParam = (value?: string) => {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
@@ -184,7 +203,7 @@ async function updateAttendance(formData: FormData) {
 
   await prisma.attendance.update({
     where: { id: attendanceId },
-    data: { timestamp: new Date(timestamp), isCompanion: Boolean(isCompanion) }
+    data: { timestamp: parseJstDatetimeLocal(timestamp), isCompanion: Boolean(isCompanion) }
   });
 
   revalidatePath("/dashboard/attendance");
@@ -216,7 +235,7 @@ async function addAttendanceRecord(formData: FormData) {
       userId,
       storeId,
       type: type as "CLOCK_IN" | "CLOCK_OUT" | "BREAK_START" | "BREAK_END",
-      timestamp: new Date(timestamp),
+      timestamp: parseJstDatetimeLocal(timestamp),
       isCompanion: false,
       approvedById: session.user.id,
       approvedAt: new Date()
@@ -300,6 +319,12 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
     const rangeStart = hasCustomRange && startDateParam ? startOfDay(startDateParam) : monthStart;
     const rangeEnd =
       hasCustomRange && endDateParam ? addDays(startOfDay(endDateParam), 1) : addDays(monthEnd, 1);
+
+    // 営業日が JST NIGHT_CUTOFF_HOUR 時から始まるため、UTC基準の rangeStart より前に
+    // 属するレコード（例: JST 0〜5時台 = 前日UTC）を取りこぼさないよう遡る
+    const jstOffsetHours = 9;
+    const queryRangeStart = new Date(rangeStart.getTime() - (jstOffsetHours - NIGHT_CUTOFF_HOUR) * 3600000);
+
     const staffList = await prisma.user.findMany({
       where: { role: { in: ["CAST", "DRIVER"] }, isActive: true, storeId: activeStoreId },
       orderBy: { displayName: "asc" }
@@ -314,7 +339,7 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
     const attendances = await safeFetchAttendances({
       where: {
         storeId: activeStoreId,
-        timestamp: { gte: rangeStart, lt: rangeEnd },
+        timestamp: { gte: queryRangeStart, lt: rangeEnd },
         ...(selectedStaffId ? { userId: selectedStaffId } : {})
       },
       include: { user: true, approvedBy: true, photo: true },
@@ -324,19 +349,24 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
     const approvals = await safeFetchApprovals({
       where: {
         storeId: activeStoreId,
-        date: { gte: startOfDay(rangeStart), lt: rangeEnd }
+        date: { gte: new Date(startOfDay(rangeStart).getTime() - (jstOffsetHours - NIGHT_CUTOFF_HOUR) * 3600000), lt: rangeEnd }
       }
     });
 
     const calendarDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
+
+    // 営業日ベースでグルーピング（JST NIGHT_CUTOFF_HOUR 時前は前営業日）
     const attendanceByDate = attendances.reduce<Record<string, AttendanceRecord[]>>((acc, record) => {
-      const key = format(record.timestamp, "yyyy-MM-dd");
+      const key = getBusinessDateKey(record.timestamp);
       acc[key] = acc[key] ? [...acc[key], record] : [record];
       return acc;
     }, {});
 
+    // approval.date は getDayRange で JST NIGHT_CUTOFF_HOUR 時始まりで保存されるため JST で解釈
     const approvalByDate = approvals.reduce<Record<string, boolean>>((acc, approval) => {
-      const key = format(approval.date, "yyyy-MM-dd");
+      const jstDate = toJst(approval.date);
+      // 営業日開始時刻(06:00 JST)以降なのでそのまま当日扱い
+      const key = format(jstDate, "yyyy-MM-dd");
       acc[key] = approval.isApproved;
       return acc;
     }, {});
