@@ -16,7 +16,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { getOrCreateDefaultStore } from "@/lib/store";
-import { getAttendanceSummaryForRange, getMonthlyAttendanceSummary, updateDayApproval, NIGHT_CUTOFF_HOUR } from "@/lib/attendance";
+import { updateDayApproval, NIGHT_CUTOFF_HOUR } from "@/lib/attendance";
 import { pruneOldAttendancePhotos } from "@/lib/attendance-photo";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -130,6 +130,49 @@ function buildDaySummary(records: AttendanceRecord[]): DaySummary {
   }
 
   return { clockInJst: clockInEvent?.jst ?? null, clockOutJst: clockOutEvent?.jst ?? null, workingMinutes };
+}
+
+type StaffPeriodSummary = {
+  staffId: string;
+  staffName: string;
+  workDays: number;
+  totalMinutes: number;
+  roundedMinutes: number;
+  hasMissingClockOut: boolean;
+};
+
+function buildStaffPeriodSummaries(attendances: AttendanceRecord[]): StaffPeriodSummary[] {
+  const byStaff = new Map<string, { staffName: string; byDate: Map<string, AttendanceRecord[]> }>();
+
+  for (const record of attendances) {
+    const dateKey = getBusinessDateKey(record.timestamp);
+    if (!byStaff.has(record.userId)) {
+      byStaff.set(record.userId, { staffName: record.user.displayName, byDate: new Map() });
+    }
+    const staffEntry = byStaff.get(record.userId)!;
+    if (!staffEntry.byDate.has(dateKey)) staffEntry.byDate.set(dateKey, []);
+    staffEntry.byDate.get(dateKey)!.push(record);
+  }
+
+  return Array.from(byStaff.entries())
+    .map(([staffId, { staffName, byDate }]) => {
+      let totalMinutes = 0;
+      let hasMissingClockOut = false;
+      for (const dayRecords of byDate.values()) {
+        const s = buildDaySummary(dayRecords);
+        totalMinutes += s.workingMinutes;
+        if (!s.clockOutJst) hasMissingClockOut = true;
+      }
+      return {
+        staffId,
+        staffName,
+        workDays: byDate.size,
+        totalMinutes,
+        roundedMinutes: Math.ceil(totalMinutes / 15) * 15,
+        hasMissingClockOut
+      };
+    })
+    .sort((a, b) => a.staffName.localeCompare(b.staffName, "ja"));
 }
 
 async function safeFetchAttendances(params: Prisma.AttendanceFindManyArgs): Promise<AttendanceRecord[]> {
@@ -371,7 +414,6 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
       return acc;
     }, {});
 
-    const totalRecords = attendances.length;
     const staffSelectValue = selectedStaffId ?? "__all__";
     const selectedDayParam = searchParams?.day;
     const selectedDay =
@@ -400,28 +442,11 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
       approvalByDate[selectedDayKey] ??
       (selectedDayAttendances.length > 0 && selectedDayAttendances.every((attendance) => Boolean(attendance.approvedAt)));
 
-    const summaryForPeriod = hasCustomRange
-      ? await getAttendanceSummaryForRange({
-          storeId: activeStoreId,
-          staffId: selectedStaffId,
-          startDate: rangeStart,
-          endDate: rangeEnd
-        })
-      : await getMonthlyAttendanceSummary({
-          storeId: activeStoreId,
-          staffId: selectedStaffId,
-          year: monthStart.getFullYear(),
-          month: monthStart.getMonth() + 1
-        });
-    const staffLabel =
-      staffSelectValue === "__all__"
-        ? "全員"
-        : staffList.find((s) => s.id === staffSelectValue)?.displayName ?? "スタッフ";
-    const rangeLabel = hasCustomRange
-      ? `勤務時間合計（${format(rangeStart, "yyyy-MM-dd")}〜${format(addDays(rangeEnd, -1), "yyyy-MM-dd")} / ${staffLabel}）`
-      : staffSelectValue === "__all__"
-        ? "勤務時間合計（全員）"
-        : `勤務時間合計（${staffLabel}）`;
+    const periodLabel = hasCustomRange
+      ? `${format(rangeStart, "yyyy/M/d")}〜${format(addDays(rangeEnd, -1), "yyyy/M/d")}`
+      : format(monthStart, "yyyy年M月");
+
+    const staffPeriodSummaries = buildStaffPeriodSummaries(attendances);
 
     return (
       <div className="space-y-8">
@@ -487,17 +512,77 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
           </CardContent>
         </Card>
 
-        <div className="grid gap-6 lg:grid-cols-3">
-          <Card>
-            <CardHeader>
-              <CardTitle>{rangeLabel}</CardTitle>
-            </CardHeader>
-            <CardContent className="text-3xl font-bold text-pink-300">
-              {summaryForPeriod.roundedHours} 時間 {summaryForPeriod.roundedRemainderMinutes} 分
-              <p className="mt-2 text-sm font-medium text-slate-300">記録件数: {totalRecords} 件</p>
-            </CardContent>
-          </Card>
-        </div>
+        {/* スタッフ別勤務サマリー */}
+        <Card>
+          <CardHeader>
+            <CardTitle>スタッフ別勤務サマリー（{periodLabel}）</CardTitle>
+            <CardDescription>給与計算用。稼働時間は 15 分単位で切り上げ。</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {staffPeriodSummaries.length === 0 ? (
+              <p className="text-sm text-slate-400">該当する勤怠記録がありません。</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-700">
+                      <th className="pb-3 text-left text-xs font-medium text-slate-400">スタッフ</th>
+                      <th className="pb-3 text-right text-xs font-medium text-slate-400">出勤日数</th>
+                      <th className="pb-3 text-right text-xs font-medium text-slate-400">実働時間</th>
+                      <th className="pb-3 pr-1 text-right text-xs font-bold text-pink-300">丸め後（15分）</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60">
+                    {staffPeriodSummaries.map((s) => (
+                      <tr key={s.staffId} className="hover:bg-slate-800/20">
+                        <td className="py-3 font-medium text-slate-200">
+                          {s.staffName}
+                          {s.hasMissingClockOut && (
+                            <span className="ml-2 rounded-full bg-amber-900/50 px-2 py-0.5 text-[11px] font-normal text-amber-300">
+                              未退勤あり
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 text-right text-slate-400">{s.workDays} 日</td>
+                        <td className="py-3 text-right text-slate-500">
+                          {Math.floor(s.totalMinutes / 60)}h{s.totalMinutes % 60 > 0 ? `${s.totalMinutes % 60}m` : ""}
+                        </td>
+                        <td className="py-3 pr-1 text-right text-lg font-bold text-pink-300">
+                          {Math.floor(s.roundedMinutes / 60)}
+                          <span className="text-sm font-medium">時間</span>
+                          {s.roundedMinutes % 60 > 0 && (
+                            <>{s.roundedMinutes % 60}<span className="text-sm font-medium">分</span></>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  {staffPeriodSummaries.length > 1 && (
+                    <tfoot>
+                      <tr className="border-t-2 border-slate-600">
+                        <td className="pt-3 text-xs font-medium text-slate-400" colSpan={3}>
+                          合計（全員）
+                        </td>
+                        <td className="pt-3 pr-1 text-right text-lg font-bold text-pink-200">
+                          {(() => {
+                            const total = staffPeriodSummaries.reduce((acc, s) => acc + s.roundedMinutes, 0);
+                            return (
+                              <>
+                                {Math.floor(total / 60)}
+                                <span className="text-sm font-medium">時間</span>
+                                {total % 60 > 0 && <>{total % 60}<span className="text-sm font-medium">分</span></>}
+                              </>
+                            );
+                          })()}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>
