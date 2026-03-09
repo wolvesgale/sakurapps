@@ -557,27 +557,6 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                       </tr>
                     ))}
                   </tbody>
-                  {staffPeriodSummaries.length > 1 && (
-                    <tfoot>
-                      <tr className="border-t-2 border-slate-600">
-                        <td className="pt-3 text-xs font-medium text-slate-400" colSpan={3}>
-                          合計（全員）
-                        </td>
-                        <td className="pt-3 pr-1 text-right text-lg font-bold text-pink-200">
-                          {(() => {
-                            const total = staffPeriodSummaries.reduce((acc, s) => acc + s.roundedMinutes, 0);
-                            return (
-                              <>
-                                {Math.floor(total / 60)}
-                                <span className="text-sm font-medium">時間</span>
-                                {total % 60 > 0 && <>{total % 60}<span className="text-sm font-medium">分</span></>}
-                              </>
-                            );
-                          })()}
-                        </td>
-                      </tr>
-                    </tfoot>
-                  )}
                 </table>
               </div>
             )}
