@@ -16,7 +16,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { getOrCreateDefaultStore } from "@/lib/store";
-import { getAttendanceSummaryForRange, getMonthlyAttendanceSummary, updateDayApproval } from "@/lib/attendance";
+import { updateDayApproval, NIGHT_CUTOFF_HOUR } from "@/lib/attendance";
 import { pruneOldAttendancePhotos } from "@/lib/attendance-photo";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,25 @@ const attendanceLabels: Record<string, string> = {
 const TZ = "Asia/Tokyo";
 
 const toJst = (date: Date) => new Date(date.toLocaleString("en-US", { timeZone: TZ }));
+
+/**
+ * タイムスタンプから「営業日」キー（yyyy-MM-dd）を返す。
+ * JST で NIGHT_CUTOFF_HOUR 時より前の打刻は前日営業日扱い。
+ */
+const getBusinessDateKey = (timestamp: Date): string => {
+  const jst = toJst(timestamp);
+  if (jst.getHours() < NIGHT_CUTOFF_HOUR) {
+    const prev = new Date(jst);
+    prev.setDate(prev.getDate() - 1);
+    return format(prev, "yyyy-MM-dd");
+  }
+  return format(jst, "yyyy-MM-dd");
+};
+
+/**
+ * datetime-local 入力値（"yyyy-MM-ddTHH:mm"）を JST として解釈して Date を返す。
+ */
+const parseJstDatetimeLocal = (value: string): Date => new Date(`${value}:00+09:00`);
 
 const parseJstDateParam = (value?: string) => {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
@@ -113,6 +132,49 @@ function buildDaySummary(records: AttendanceRecord[]): DaySummary {
   return { clockInJst: clockInEvent?.jst ?? null, clockOutJst: clockOutEvent?.jst ?? null, workingMinutes };
 }
 
+type StaffPeriodSummary = {
+  staffId: string;
+  staffName: string;
+  workDays: number;
+  totalMinutes: number;
+  roundedMinutes: number;
+  hasMissingClockOut: boolean;
+};
+
+function buildStaffPeriodSummaries(attendances: AttendanceRecord[]): StaffPeriodSummary[] {
+  const byStaff = new Map<string, { staffName: string; byDate: Map<string, AttendanceRecord[]> }>();
+
+  for (const record of attendances) {
+    const dateKey = getBusinessDateKey(record.timestamp);
+    if (!byStaff.has(record.userId)) {
+      byStaff.set(record.userId, { staffName: record.user.displayName, byDate: new Map() });
+    }
+    const staffEntry = byStaff.get(record.userId)!;
+    if (!staffEntry.byDate.has(dateKey)) staffEntry.byDate.set(dateKey, []);
+    staffEntry.byDate.get(dateKey)!.push(record);
+  }
+
+  return Array.from(byStaff.entries())
+    .map(([staffId, { staffName, byDate }]) => {
+      let totalMinutes = 0;
+      let hasMissingClockOut = false;
+      for (const dayRecords of byDate.values()) {
+        const s = buildDaySummary(dayRecords);
+        totalMinutes += s.workingMinutes;
+        if (!s.clockOutJst) hasMissingClockOut = true;
+      }
+      return {
+        staffId,
+        staffName,
+        workDays: byDate.size,
+        totalMinutes,
+        roundedMinutes: Math.ceil(totalMinutes / 15) * 15,
+        hasMissingClockOut
+      };
+    })
+    .sort((a, b) => a.staffName.localeCompare(b.staffName, "ja"));
+}
+
 async function safeFetchAttendances(params: Prisma.AttendanceFindManyArgs): Promise<AttendanceRecord[]> {
   try {
     return (await prisma.attendance.findMany(params)) as AttendanceRecord[];
@@ -184,7 +246,7 @@ async function updateAttendance(formData: FormData) {
 
   await prisma.attendance.update({
     where: { id: attendanceId },
-    data: { timestamp: new Date(timestamp), isCompanion: Boolean(isCompanion) }
+    data: { timestamp: parseJstDatetimeLocal(timestamp), isCompanion: Boolean(isCompanion) }
   });
 
   revalidatePath("/dashboard/attendance");
@@ -216,7 +278,7 @@ async function addAttendanceRecord(formData: FormData) {
       userId,
       storeId,
       type: type as "CLOCK_IN" | "CLOCK_OUT" | "BREAK_START" | "BREAK_END",
-      timestamp: new Date(timestamp),
+      timestamp: parseJstDatetimeLocal(timestamp),
       isCompanion: false,
       approvedById: session.user.id,
       approvedAt: new Date()
@@ -300,6 +362,12 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
     const rangeStart = hasCustomRange && startDateParam ? startOfDay(startDateParam) : monthStart;
     const rangeEnd =
       hasCustomRange && endDateParam ? addDays(startOfDay(endDateParam), 1) : addDays(monthEnd, 1);
+
+    // 営業日が JST NIGHT_CUTOFF_HOUR 時から始まるため、UTC基準の rangeStart より前に
+    // 属するレコード（例: JST 0〜5時台 = 前日UTC）を取りこぼさないよう遡る
+    const jstOffsetHours = 9;
+    const queryRangeStart = new Date(rangeStart.getTime() - (jstOffsetHours - NIGHT_CUTOFF_HOUR) * 3600000);
+
     const staffList = await prisma.user.findMany({
       where: { role: { in: ["CAST", "DRIVER"] }, isActive: true, storeId: activeStoreId },
       orderBy: { displayName: "asc" }
@@ -314,7 +382,7 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
     const attendances = await safeFetchAttendances({
       where: {
         storeId: activeStoreId,
-        timestamp: { gte: rangeStart, lt: rangeEnd },
+        timestamp: { gte: queryRangeStart, lt: rangeEnd },
         ...(selectedStaffId ? { userId: selectedStaffId } : {})
       },
       include: { user: true, approvedBy: true, photo: true },
@@ -324,24 +392,28 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
     const approvals = await safeFetchApprovals({
       where: {
         storeId: activeStoreId,
-        date: { gte: startOfDay(rangeStart), lt: rangeEnd }
+        date: { gte: new Date(startOfDay(rangeStart).getTime() - (jstOffsetHours - NIGHT_CUTOFF_HOUR) * 3600000), lt: rangeEnd }
       }
     });
 
     const calendarDays = eachDayOfInterval({ start: monthStart, end: monthEnd });
+
+    // 営業日ベースでグルーピング（JST NIGHT_CUTOFF_HOUR 時前は前営業日）
     const attendanceByDate = attendances.reduce<Record<string, AttendanceRecord[]>>((acc, record) => {
-      const key = format(record.timestamp, "yyyy-MM-dd");
+      const key = getBusinessDateKey(record.timestamp);
       acc[key] = acc[key] ? [...acc[key], record] : [record];
       return acc;
     }, {});
 
+    // approval.date は getDayRange で JST NIGHT_CUTOFF_HOUR 時始まりで保存されるため JST で解釈
     const approvalByDate = approvals.reduce<Record<string, boolean>>((acc, approval) => {
-      const key = format(approval.date, "yyyy-MM-dd");
+      const jstDate = toJst(approval.date);
+      // 営業日開始時刻(06:00 JST)以降なのでそのまま当日扱い
+      const key = format(jstDate, "yyyy-MM-dd");
       acc[key] = approval.isApproved;
       return acc;
     }, {});
 
-    const totalRecords = attendances.length;
     const staffSelectValue = selectedStaffId ?? "__all__";
     const selectedDayParam = searchParams?.day;
     const selectedDay =
@@ -370,28 +442,11 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
       approvalByDate[selectedDayKey] ??
       (selectedDayAttendances.length > 0 && selectedDayAttendances.every((attendance) => Boolean(attendance.approvedAt)));
 
-    const summaryForPeriod = hasCustomRange
-      ? await getAttendanceSummaryForRange({
-          storeId: activeStoreId,
-          staffId: selectedStaffId,
-          startDate: rangeStart,
-          endDate: rangeEnd
-        })
-      : await getMonthlyAttendanceSummary({
-          storeId: activeStoreId,
-          staffId: selectedStaffId,
-          year: monthStart.getFullYear(),
-          month: monthStart.getMonth() + 1
-        });
-    const staffLabel =
-      staffSelectValue === "__all__"
-        ? "全員"
-        : staffList.find((s) => s.id === staffSelectValue)?.displayName ?? "スタッフ";
-    const rangeLabel = hasCustomRange
-      ? `勤務時間合計（${format(rangeStart, "yyyy-MM-dd")}〜${format(addDays(rangeEnd, -1), "yyyy-MM-dd")} / ${staffLabel}）`
-      : staffSelectValue === "__all__"
-        ? "勤務時間合計（全員）"
-        : `勤務時間合計（${staffLabel}）`;
+    const periodLabel = hasCustomRange
+      ? `${format(rangeStart, "yyyy/M/d")}〜${format(addDays(rangeEnd, -1), "yyyy/M/d")}`
+      : format(monthStart, "yyyy年M月");
+
+    const staffPeriodSummaries = buildStaffPeriodSummaries(attendances);
 
     return (
       <div className="space-y-8">
@@ -457,17 +512,56 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
           </CardContent>
         </Card>
 
-        <div className="grid gap-6 lg:grid-cols-3">
-          <Card>
-            <CardHeader>
-              <CardTitle>{rangeLabel}</CardTitle>
-            </CardHeader>
-            <CardContent className="text-3xl font-bold text-pink-300">
-              {summaryForPeriod.roundedHours} 時間 {summaryForPeriod.roundedRemainderMinutes} 分
-              <p className="mt-2 text-sm font-medium text-slate-300">記録件数: {totalRecords} 件</p>
-            </CardContent>
-          </Card>
-        </div>
+        {/* スタッフ別勤務サマリー */}
+        <Card>
+          <CardHeader>
+            <CardTitle>スタッフ別勤務サマリー（{periodLabel}）</CardTitle>
+            <CardDescription>給与計算用。稼働時間は 15 分単位で切り上げ。</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {staffPeriodSummaries.length === 0 ? (
+              <p className="text-sm text-slate-400">該当する勤怠記録がありません。</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-700">
+                      <th className="pb-3 text-left text-xs font-medium text-slate-400">スタッフ</th>
+                      <th className="pb-3 text-right text-xs font-medium text-slate-400">出勤日数</th>
+                      <th className="pb-3 text-right text-xs font-medium text-slate-400">実働時間</th>
+                      <th className="pb-3 pr-1 text-right text-xs font-bold text-pink-300">丸め後（15分）</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60">
+                    {staffPeriodSummaries.map((s) => (
+                      <tr key={s.staffId} className="hover:bg-slate-800/20">
+                        <td className="py-3 font-medium text-slate-200">
+                          {s.staffName}
+                          {s.hasMissingClockOut && (
+                            <span className="ml-2 rounded-full bg-amber-900/50 px-2 py-0.5 text-[11px] font-normal text-amber-300">
+                              未退勤あり
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 text-right text-slate-400">{s.workDays} 日</td>
+                        <td className="py-3 text-right text-slate-500">
+                          {Math.floor(s.totalMinutes / 60)}h{s.totalMinutes % 60 > 0 ? `${s.totalMinutes % 60}m` : ""}
+                        </td>
+                        <td className="py-3 pr-1 text-right text-lg font-bold text-pink-300">
+                          {Math.floor(s.roundedMinutes / 60)}
+                          <span className="text-sm font-medium">時間</span>
+                          {s.roundedMinutes % 60 > 0 && (
+                            <>{s.roundedMinutes % 60}<span className="text-sm font-medium">分</span></>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>
