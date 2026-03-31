@@ -336,6 +336,63 @@ async function unapproveDay(formData: FormData) {
   revalidatePath("/dashboard/attendance");
 }
 
+async function registerFullAttendance(formData: FormData) {
+  "use server";
+  const session = await getCurrentSession();
+
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) {
+    throw new Error("Unauthorized");
+  }
+
+  const userId = formData.get("userId");
+  const storeId = formData.get("storeId");
+  const clockIn = formData.get("clockIn");
+  const clockOut = formData.get("clockOut");
+  const breakStart = formData.get("breakStart");
+  const breakEnd = formData.get("breakEnd");
+
+  if (!userId || typeof userId !== "string") throw new Error("スタッフを選択してください");
+  if (!storeId || typeof storeId !== "string") throw new Error("店舗IDが不明です");
+  if (!clockIn || typeof clockIn !== "string" || !clockIn.trim()) throw new Error("出勤日時を入力してください");
+  if (!clockOut || typeof clockOut !== "string" || !clockOut.trim()) throw new Error("退勤日時を入力してください");
+
+  const clockInDate = parseJstDatetimeLocal(clockIn);
+  const clockOutDate = parseJstDatetimeLocal(clockOut);
+
+  if (clockOutDate <= clockInDate) throw new Error("退勤は出勤より後の日時にしてください");
+
+  const records: { type: "CLOCK_IN" | "CLOCK_OUT" | "BREAK_START" | "BREAK_END"; timestamp: Date }[] = [
+    { type: "CLOCK_IN", timestamp: clockInDate },
+  ];
+
+  if (breakStart && typeof breakStart === "string" && breakStart.trim()) {
+    records.push({ type: "BREAK_START", timestamp: parseJstDatetimeLocal(breakStart) });
+    if (breakEnd && typeof breakEnd === "string" && breakEnd.trim()) {
+      records.push({ type: "BREAK_END", timestamp: parseJstDatetimeLocal(breakEnd) });
+    }
+  }
+
+  records.push({ type: "CLOCK_OUT", timestamp: clockOutDate });
+
+  await prisma.$transaction(
+    records.map((r) =>
+      prisma.attendance.create({
+        data: {
+          userId,
+          storeId,
+          type: r.type,
+          timestamp: r.timestamp,
+          isCompanion: false,
+          approvedById: session.user.id,
+          approvedAt: new Date(),
+        },
+      })
+    )
+  );
+
+  revalidatePath("/dashboard/attendance");
+}
+
 export default async function AttendancePage({ searchParams }: AttendancePageProps) {
   const session = await getCurrentSession();
 
@@ -451,6 +508,55 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
     return (
       <div className="space-y-8">
         <h1 className="text-2xl font-semibold text-pink-300">勤怠管理</h1>
+
+        {/* 勤怠登録 */}
+        <Card>
+          <CardHeader>
+            <CardTitle>勤怠登録</CardTitle>
+            <CardDescription>任意のスタッフに対して任意の日付で出退勤を登録します。登録と同時に承認済みとなります。</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form action={registerFullAttendance} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+              <input type="hidden" name="storeId" value={activeStoreId} />
+              <div className="space-y-2">
+                <Label htmlFor="reg-staff">スタッフ</Label>
+                <Select name="userId" required>
+                  <SelectTrigger id="reg-staff">
+                    <SelectValue placeholder="スタッフを選択" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {staffList.map((staff) => (
+                      <SelectItem key={staff.id} value={staff.id}>
+                        {staff.displayName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="reg-clock-in">出勤日時</Label>
+                <Input id="reg-clock-in" type="datetime-local" name="clockIn" required />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="reg-clock-out">退勤日時</Label>
+                <Input id="reg-clock-out" type="datetime-local" name="clockOut" required />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="reg-break-start">休憩開始（任意）</Label>
+                <Input id="reg-break-start" type="datetime-local" name="breakStart" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="reg-break-end">休憩終了（任意）</Label>
+                <Input id="reg-break-end" type="datetime-local" name="breakEnd" />
+              </div>
+              <div className="flex items-end sm:col-span-2 lg:col-span-3 xl:col-span-5">
+                <Button type="submit" className="bg-pink-700 hover:bg-pink-600 text-white">
+                  登録する
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>
