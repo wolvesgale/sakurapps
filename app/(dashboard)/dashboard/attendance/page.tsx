@@ -16,7 +16,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
 import { getOrCreateDefaultStore } from "@/lib/store";
-import { updateDayApproval, NIGHT_CUTOFF_HOUR } from "@/lib/attendance";
+import { updateDayApproval, NIGHT_CUTOFF_HOUR, calculateMonthlySummaryFromRecords } from "@/lib/attendance";
 import { pruneOldAttendancePhotos } from "@/lib/attendance-photo";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -142,28 +142,26 @@ type StaffPeriodSummary = {
 };
 
 function buildStaffPeriodSummaries(attendances: AttendanceRecord[]): StaffPeriodSummary[] {
-  const byStaff = new Map<string, { staffName: string; byDate: Map<string, AttendanceRecord[]> }>();
+  const byStaff = new Map<string, { staffName: string; records: AttendanceRecord[]; byDate: Map<string, AttendanceRecord[]> }>();
 
   for (const record of attendances) {
     const dateKey = getBusinessDateKey(record.timestamp);
     if (!byStaff.has(record.userId)) {
-      byStaff.set(record.userId, { staffName: record.user.displayName, byDate: new Map() });
+      byStaff.set(record.userId, { staffName: record.user.displayName, records: [], byDate: new Map() });
     }
     const staffEntry = byStaff.get(record.userId)!;
+    staffEntry.records.push(record);
     if (!staffEntry.byDate.has(dateKey)) staffEntry.byDate.set(dateKey, []);
     staffEntry.byDate.get(dateKey)!.push(record);
   }
 
   return Array.from(byStaff.entries())
-    .map(([staffId, { staffName, byDate }]) => {
-      let totalMinutes = 0;
-      let roundedMinutes = 0;
+    .map(([staffId, { staffName, records, byDate }]) => {
+      // Use the same function as the terminal stats API to guarantee identical results
+      const { totalMinutes, roundedMinutes } = calculateMonthlySummaryFromRecords(records);
       let hasMissingClockOut = false;
       for (const dayRecords of byDate.values()) {
-        const s = buildDaySummary(dayRecords);
-        totalMinutes += s.workingMinutes;
-        roundedMinutes += Math.ceil(s.workingMinutes / 15) * 15;
-        if (!s.clockOutJst) hasMissingClockOut = true;
+        if (!buildDaySummary(dayRecords).clockOutJst) hasMissingClockOut = true;
       }
       return {
         staffId,
