@@ -1,6 +1,5 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { hash } from "bcryptjs";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
@@ -24,14 +23,10 @@ async function createCast(formData: FormData) {
   if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) redirect("/dashboard");
 
   const displayName = formData.get("displayName");
-  const pin = formData.get("pin");
   const storeId = formData.get("storeId");
 
   if (!displayName || typeof displayName !== "string" || !displayName.trim()) {
     redirect("/staff?error=" + encodeURIComponent("表示名を入力してください"));
-  }
-  if (!pin || typeof pin !== "string" || pin.length < 4) {
-    redirect("/staff?error=" + encodeURIComponent("PINを4桁以上で入力してください"));
   }
 
   try {
@@ -46,7 +41,6 @@ async function createCast(formData: FormData) {
         username: generateUsername(displayName),
         role: "CAST",
         isActive: true,
-        castPinHash: await hash(pin, 10),
         store: { connect: { id: resolvedStoreId } }
       }
     });
@@ -102,7 +96,6 @@ async function updateStaff(formData: FormData) {
 
   const userId = formData.get("userId");
   const displayName = formData.get("displayName");
-  const pin = formData.get("pin");
   const storeId = formData.get("storeId");
 
   if (!userId || typeof userId !== "string") redirect("/staff?error=" + encodeURIComponent("ユーザーIDが不明です"));
@@ -114,10 +107,6 @@ async function updateStaff(formData: FormData) {
 
   if (typeof storeId === "string" && storeId.length > 0) {
     data.store = { connect: { id: storeId } };
-  }
-
-  if (typeof pin === "string" && pin.length >= 4) {
-    data.castPinHash = await hash(pin, 10);
   }
 
   try {
@@ -210,17 +199,13 @@ export default async function StaffPage({ searchParams }: { searchParams?: { err
               <span className="rounded-full bg-pink-900/60 px-2.5 py-0.5 text-sm text-pink-200">キャスト</span>
               追加
             </CardTitle>
-            <CardDescription>端末から PIN で出退勤します。</CardDescription>
+            <CardDescription>端末のスタッフ選択から出退勤します。</CardDescription>
           </CardHeader>
           <CardContent>
             <form action={createCast} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="cast-name">表示名</Label>
                 <Input id="cast-name" name="displayName" required placeholder="さくら" />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="cast-pin">PIN（4〜8桁）</Label>
-                <Input id="cast-pin" name="pin" type="password" placeholder="1234" maxLength={8} required autoComplete="new-password" />
               </div>
               {multiStore && (
                 <div className="space-y-2">
@@ -290,7 +275,6 @@ export default async function StaffPage({ searchParams }: { searchParams?: { err
             <ul className="space-y-3 text-sm">
               {staff.map((member) => (
                 <li key={member.id} className="rounded-lg border border-slate-800 bg-slate-900/60">
-                  {/* ヘッダー行 */}
                   <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-3">
                       <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${roleBadge[member.role] ?? "bg-slate-700 text-slate-200"}`}>
@@ -298,26 +282,17 @@ export default async function StaffPage({ searchParams }: { searchParams?: { err
                       </span>
                       <div>
                         <p className="font-semibold text-pink-100">{member.displayName}</p>
-                        <p className="text-xs text-slate-500">
-                          {member.store?.name ?? "店舗未設定"}
-                          {member.role === "CAST" && (
-                            <span className="ml-2">{member.castPinHash ? "・PIN設定済" : "・PIN未設定"}</span>
-                          )}
-                        </p>
+                        <p className="text-xs text-slate-500">{member.store?.name ?? "店舗未設定"}</p>
                       </div>
                     </div>
-                    {/* 削除ボタン */}
                     <form action={deleteStaff} className="shrink-0">
                       <input type="hidden" name="userId" value={member.id} />
-                      <Button type="submit" size="sm" variant="destructive"
-                        onClick={undefined}
-                        className="text-xs">
+                      <Button type="submit" size="sm" variant="destructive" className="text-xs">
                         削除
                       </Button>
                     </form>
                   </div>
 
-                  {/* 編集フォーム（折りたたみ） */}
                   <details className="border-t border-slate-800/60">
                     <summary className="cursor-pointer px-4 py-2 text-xs text-slate-400 hover:text-slate-300">
                       編集
@@ -328,12 +303,6 @@ export default async function StaffPage({ searchParams }: { searchParams?: { err
                         <Label className="text-xs text-slate-400">表示名</Label>
                         <Input name="displayName" defaultValue={member.displayName} className="md:w-48" />
                       </div>
-                      {member.role === "CAST" && (
-                        <div className="space-y-1">
-                          <Label className="text-xs text-slate-400">PIN 変更（空白で変更なし）</Label>
-                          <Input name="pin" type="password" placeholder="新しいPIN" maxLength={8} autoComplete="new-password" className="md:w-36" />
-                        </div>
-                      )}
                       {multiStore && (
                         <div className="space-y-1">
                           <Label className="text-xs text-slate-400">所属店舗</Label>
