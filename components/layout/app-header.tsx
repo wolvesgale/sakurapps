@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/dashboard", label: "ダッシュボード" },
-  { href: "/dashboard/staff", label: "スタッフ" },
+  { href: "/staff", label: "スタッフ" },
   { href: "/dashboard/attendance", label: "勤怠管理" },
   { href: "/dashboard/reports", label: "レポート" },
   { href: "/dashboard/terminal-mgmt", label: "端末管理" }
@@ -31,7 +31,7 @@ export function AppHeader() {
               .filter((link) => {
                 if (link.href === "/dashboard/stores" && !["OWNER", "ADMIN"].includes(role ?? ""))
                   return false;
-                if (link.href === "/dashboard/staff" && role === "DRIVER") return false;
+                if (link.href === "/staff" && role === "DRIVER") return false;
                 if (link.href === "/dashboard/reports" && role === "DRIVER") return false;
                 if (link.href === "/dashboard/terminal-mgmt" && role === "DRIVER") return false;
                 if (link.href === "/dashboard/terminal-mgmt" && role === "CAST") return false;

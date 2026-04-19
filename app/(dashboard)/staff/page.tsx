@@ -4,6 +4,7 @@ import { hash } from "bcryptjs";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/lib/session";
+import { getOrCreateDefaultStore } from "@/lib/store";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,79 +21,93 @@ function generateUsername(displayName: string): string {
 async function createCast(formData: FormData) {
   "use server";
   const session = await getCurrentSession();
-  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) throw new Error("Unauthorized");
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) redirect("/dashboard");
 
   const displayName = formData.get("displayName");
   const pin = formData.get("pin");
   const storeId = formData.get("storeId");
 
   if (!displayName || typeof displayName !== "string" || !displayName.trim()) {
-    throw new Error("表示名を入力してください");
+    redirect("/staff?error=" + encodeURIComponent("表示名を入力してください"));
   }
   if (!pin || typeof pin !== "string" || pin.length < 4) {
-    throw new Error("PIN を4桁以上で入力してください");
+    redirect("/staff?error=" + encodeURIComponent("PINを4桁以上で入力してください"));
   }
 
-  const resolvedStoreId =
-    typeof storeId === "string" && storeId.length > 0 ? storeId : session.user.storeId ?? null;
-  if (!resolvedStoreId) throw new Error("店舗を選択してください");
+  try {
+    const resolvedStoreId =
+      typeof storeId === "string" && storeId.length > 0
+        ? storeId
+        : session.user.storeId ?? (await getOrCreateDefaultStore()).id;
 
-  await prisma.user.create({
-    data: {
-      displayName: displayName.trim(),
-      username: generateUsername(displayName),
-      role: "CAST",
-      isActive: true,
-      castPinHash: await hash(pin, 10),
-      store: { connect: { id: resolvedStoreId } }
-    }
-  });
+    await prisma.user.create({
+      data: {
+        displayName: displayName.trim(),
+        username: generateUsername(displayName),
+        role: "CAST",
+        isActive: true,
+        castPinHash: await hash(pin, 10),
+        store: { connect: { id: resolvedStoreId } }
+      }
+    });
+  } catch (error) {
+    console.error("[staff:createCast]", error);
+    redirect("/staff?error=" + encodeURIComponent("キャストの作成に失敗しました"));
+  }
 
   revalidatePath("/staff");
+  redirect("/staff");
 }
 
 async function createDriver(formData: FormData) {
   "use server";
   const session = await getCurrentSession();
-  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) throw new Error("Unauthorized");
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) redirect("/dashboard");
 
   const displayName = formData.get("displayName");
   const storeId = formData.get("storeId");
 
   if (!displayName || typeof displayName !== "string" || !displayName.trim()) {
-    throw new Error("表示名を入力してください");
+    redirect("/staff?error=" + encodeURIComponent("表示名を入力してください"));
   }
 
-  const resolvedStoreId =
-    typeof storeId === "string" && storeId.length > 0 ? storeId : session.user.storeId ?? null;
-  if (!resolvedStoreId) throw new Error("店舗を選択してください");
+  try {
+    const resolvedStoreId =
+      typeof storeId === "string" && storeId.length > 0
+        ? storeId
+        : session.user.storeId ?? (await getOrCreateDefaultStore()).id;
 
-  await prisma.user.create({
-    data: {
-      displayName: displayName.trim(),
-      username: generateUsername(displayName),
-      role: "DRIVER",
-      isActive: true,
-      store: { connect: { id: resolvedStoreId } }
-    }
-  });
+    await prisma.user.create({
+      data: {
+        displayName: displayName.trim(),
+        username: generateUsername(displayName),
+        role: "DRIVER",
+        isActive: true,
+        store: { connect: { id: resolvedStoreId } }
+      }
+    });
+  } catch (error) {
+    console.error("[staff:createDriver]", error);
+    redirect("/staff?error=" + encodeURIComponent("ドライバーの作成に失敗しました"));
+  }
 
   revalidatePath("/staff");
+  redirect("/staff");
 }
 
 async function updateStaff(formData: FormData) {
   "use server";
   const session = await getCurrentSession();
-  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) throw new Error("Unauthorized");
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) redirect("/dashboard");
 
   const userId = formData.get("userId");
   const displayName = formData.get("displayName");
   const pin = formData.get("pin");
   const storeId = formData.get("storeId");
 
-  if (!userId || typeof userId !== "string") throw new Error("ユーザーIDが不明です");
+  if (!userId || typeof userId !== "string") redirect("/staff?error=" + encodeURIComponent("ユーザーIDが不明です"));
   if (!displayName || typeof displayName !== "string" || !displayName.trim()) {
-    throw new Error("表示名を入力してください");
+    redirect("/staff?error=" + encodeURIComponent("表示名を入力してください"));
   }
 
   const data: Prisma.UserUpdateInput = { displayName: displayName.trim() };
@@ -105,20 +120,41 @@ async function updateStaff(formData: FormData) {
     data.castPinHash = await hash(pin, 10);
   }
 
-  await prisma.user.update({ where: { id: userId }, data });
+  try {
+    await prisma.user.update({ where: { id: userId }, data });
+  } catch (error) {
+    console.error("[staff:updateStaff]", error);
+    redirect("/staff?error=" + encodeURIComponent("スタッフ情報の更新に失敗しました"));
+  }
+
   revalidatePath("/staff");
+  redirect("/staff");
 }
 
 async function deleteStaff(formData: FormData) {
   "use server";
   const session = await getCurrentSession();
-  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) throw new Error("Unauthorized");
+  if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) redirect("/dashboard");
 
   const userId = formData.get("userId");
-  if (!userId || typeof userId !== "string") throw new Error("ユーザーIDが不明です");
+  if (!userId || typeof userId !== "string") redirect("/staff?error=" + encodeURIComponent("ユーザーIDが不明です"));
 
-  await prisma.user.delete({ where: { id: userId } });
+  try {
+    await prisma.user.delete({ where: { id: userId } });
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error as { code: string }).code === "P2003"
+    ) {
+      redirect("/staff?error=" + encodeURIComponent("関連データがあるため削除できません。先に勤怠・売上データを削除してください。"));
+    }
+    console.error("[staff:deleteStaff]", error);
+    redirect("/staff?error=" + encodeURIComponent("削除に失敗しました"));
+  }
+
   revalidatePath("/staff");
+  redirect("/staff");
 }
 
 const roleLabel: Record<string, string> = { CAST: "キャスト", DRIVER: "ドライバー" };
@@ -127,9 +163,11 @@ const roleBadge: Record<string, string> = {
   DRIVER: "bg-blue-900/60 text-blue-200"
 };
 
-export default async function StaffPage() {
+export default async function StaffPage({ searchParams }: { searchParams?: { error?: string } }) {
   const session = await getCurrentSession();
   if (!session || !["OWNER", "ADMIN"].includes(session.user.role)) redirect("/dashboard");
+
+  const errorMessage = searchParams?.error ?? null;
 
   const stores = await prisma.store.findMany({ orderBy: { name: "asc" } });
   const visibleStores =
@@ -156,6 +194,12 @@ export default async function StaffPage() {
   return (
     <div className="space-y-8">
       <h1 className="text-2xl font-semibold text-pink-300">スタッフ管理</h1>
+
+      {errorMessage && (
+        <div className="rounded-lg border border-red-800/50 bg-red-950/30 px-4 py-3 text-sm text-red-300">
+          {errorMessage}
+        </div>
+      )}
 
       {/* 追加フォーム */}
       <div className="grid gap-6 lg:grid-cols-2">
