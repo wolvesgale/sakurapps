@@ -157,10 +157,12 @@ function buildStaffPeriodSummaries(attendances: AttendanceRecord[]): StaffPeriod
   return Array.from(byStaff.entries())
     .map(([staffId, { staffName, byDate }]) => {
       let totalMinutes = 0;
+      let roundedMinutes = 0;
       let hasMissingClockOut = false;
       for (const dayRecords of byDate.values()) {
         const s = buildDaySummary(dayRecords);
         totalMinutes += s.workingMinutes;
+        roundedMinutes += Math.ceil(s.workingMinutes / 15) * 15;
         if (!s.clockOutJst) hasMissingClockOut = true;
       }
       return {
@@ -168,7 +170,7 @@ function buildStaffPeriodSummaries(attendances: AttendanceRecord[]): StaffPeriod
         staffName,
         workDays: byDate.size,
         totalMinutes,
-        roundedMinutes: Math.ceil(totalMinutes / 15) * 15,
+        roundedMinutes,
         hasMissingClockOut
       };
     })
