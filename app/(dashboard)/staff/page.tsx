@@ -164,7 +164,7 @@ export default async function StaffPage({ searchParams }: { searchParams?: { err
       ? stores.filter((s) => s.id === session.user.storeId)
       : stores;
 
-  const staff = await prisma.user.findMany({
+  const staffRaw = await prisma.user.findMany({
     where: {
       role: { in: ["CAST", "DRIVER"] },
       ...(session.user.role === "ADMIN" && session.user.storeId
@@ -172,8 +172,13 @@ export default async function StaffPage({ searchParams }: { searchParams?: { err
         : {})
     },
     include: { store: true },
-    orderBy: [{ role: "asc" }, { displayName: "asc" }]
+    orderBy: { displayName: "asc" }
   });
+
+  const staff = [
+    ...staffRaw.filter((s) => s.role === "CAST"),
+    ...staffRaw.filter((s) => s.role === "DRIVER")
+  ];
 
   const defaultStoreId =
     session.user.storeId ?? (visibleStores.length === 1 ? visibleStores[0].id : undefined);
