@@ -60,6 +60,15 @@ export function TerminalScreen() {
   const [activeStaff, setActiveStaff] = useState<ActiveStaff[]>([]);
   const [isLoadingStore, setIsLoadingStore] = useState(false);
 
+  type StaffStats = {
+    workingHours: number;
+    workingRemainderMinutes: number;
+    totalSales: number;
+    companionCount: number;
+  };
+  const [staffStats, setStaffStats] = useState<StaffStats | null>(null);
+  const [isLoadingStats, setIsLoadingStats] = useState(false);
+
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [capturedDataUrl, setCapturedDataUrl] = useState<string | null>(null);
@@ -380,6 +389,15 @@ export function TerminalScreen() {
               value={selectedCastId}
               onValueChange={(value) => {
                 setSelectedCastId(value);
+                setStaffStats(null);
+                if (value !== NO_SELECTION && store?.id) {
+                  setIsLoadingStats(true);
+                  fetch(`/api/terminal/staff-stats?staffId=${value}&storeId=${store.id}`)
+                    .then((r) => r.json())
+                    .then((data: StaffStats) => setStaffStats(data))
+                    .catch(() => setStaffStats(null))
+                    .finally(() => setIsLoadingStats(false));
+                }
               }}
               disabled={isLoadingStore}
             >
@@ -451,6 +469,44 @@ export function TerminalScreen() {
               休憩終了
             </Button>
           </div>
+
+          {selectedCastId !== NO_SELECTION ? (
+            <div className="rounded-2xl border border-pink-800/40 bg-pink-950/20 p-4">
+              <h3 className="mb-3 text-sm font-semibold text-pink-200">当月実績</h3>
+              {isLoadingStats ? (
+                <p className="text-sm text-slate-400">読み込み中...</p>
+              ) : staffStats ? (
+                <div className="grid grid-cols-3 gap-3 text-center">
+                  <div className="rounded-xl border border-slate-800 bg-black/40 px-2 py-3">
+                    <p className="text-xs text-slate-400">出勤時間</p>
+                    <p className="mt-1 text-xl font-bold text-pink-100">
+                      {staffStats.workingHours}
+                      <span className="text-sm font-normal">h</span>
+                      {staffStats.workingRemainderMinutes > 0 ? (
+                        <>
+                          {staffStats.workingRemainderMinutes}
+                          <span className="text-sm font-normal">m</span>
+                        </>
+                      ) : null}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-slate-800 bg-black/40 px-2 py-3">
+                    <p className="text-xs text-slate-400">売上合計</p>
+                    <p className="mt-1 text-xl font-bold text-pink-100">
+                      ¥{staffStats.totalSales.toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-slate-800 bg-black/40 px-2 py-3">
+                    <p className="text-xs text-slate-400">同伴回数</p>
+                    <p className="mt-1 text-xl font-bold text-pink-100">
+                      {staffStats.companionCount}
+                      <span className="text-sm font-normal">回</span>
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           {SHOW_ACTIVE_STAFF ? (
             <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
